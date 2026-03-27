@@ -10,20 +10,23 @@ defmodule Esp32 do
   @doc """
   Connects to an ESP32 device, puts it in bootloader mode, and synchronizes.
 
+  @doc \"""
+  Connects to an ESP32 device, puts it in bootloader mode, and synchronizes.
+
   Options:
-  - `baud_rate`: Baud rate for communication (default 115200)
-  - `en_pin`: EN (reset) pin name, or :auto_reset for UART signal-based reset
-  - `io0_pin`: IO0 (strapping) pin name (ignored if using :auto_reset)
-  - `use_stub`: If true, load the flasher stub (default true)
+  - `:baud_rate` - Baud rate for communication (default 115200)
+  - `:use_stub` - If true, load the flasher stub (default true)
+  - `:auto_reset` - If true, use UART DTR/RTS signals for reset (default false)
+  - `:en_pin` - EN (reset) pin name (required if not using :auto_reset)
+  - `:io0_pin` - IO0 (strapping) pin name (required if not using :auto_reset)
   """
-  @spec connect(String.t(), String.t() | :auto_reset, String.t() | nil, keyword()) ::
-          {:ok, pid()} | {:error, any()}
-  def connect(uart_port, en_pin, io0_pin, opts \\ []) do
+  @spec connect(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
+  def connect(uart_port, opts \\ []) do
     baud_rate = Keyword.get(opts, :baud_rate, 115_200)
     use_stub = Keyword.get(opts, :use_stub, true)
 
     with {:ok, uart} <- UART.open(uart_port, baud_rate),
-         :ok <- reset_into_bootloader(uart, en_pin, io0_pin),
+         :ok <- reset_into_bootloader(uart, opts),
          :ok <- Bootloader.sync(uart) do
       if use_stub do
         with {:ok, chip_family} <- Bootloader.detect_chip(uart),
@@ -36,10 +39,15 @@ defmodule Esp32 do
     end
   end
 
-  defp reset_into_bootloader(uart, :auto_reset, _io0_pin), do: UART.auto_reset(uart)
-
-  defp reset_into_bootloader(_uart, en_pin, io0_pin),
-    do: GPIO.enter_bootloader_mode(en_pin, io0_pin)
+  defp reset_into_bootloader(uart, opts) do
+    if Keyword.get(opts, :auto_reset, false) do
+      UART.auto_reset(uart)
+    else
+      en_pin = Keyword.get(opts, :en_pin)
+      io0_pin = Keyword.get(opts, :io0_pin)
+      GPIO.enter_bootloader_mode(en_pin, io0_pin)
+    end
+  end
 
   @doc """
   Synchronizes with the ESP32 bootloader.

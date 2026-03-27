@@ -18,18 +18,22 @@ defmodule Esp32.HITLTest do
     en_pin = System.get_env("ESP32_EN_PIN", "en")
     io0_pin = System.get_env("ESP32_IO0_PIN", "io0")
 
-    # Use auto_reset if the environment says so, or if we want to try both
-    reset_mode = if en_pin == "auto", do: :auto_reset, else: en_pin
+    # Use auto_reset if the environment says so
+    opts =
+      if en_pin == "auto" do
+        [auto_reset: true]
+      else
+        [en_pin: en_pin, io0_pin: io0_pin]
+      end
 
     # Attempt connection
-    assert {:ok, uart} = Esp32.connect(uart_port, reset_mode, io0_pin, use_stub: true)
+    assert {:ok, uart} = Esp32.connect(uart_port, opts ++ [use_stub: true])
 
     # Detect chip
     assert {:ok, chip} = Esp32.detect_chip(uart)
     IO.puts("\n[HITL] Detected Chip: #{chip}")
 
-    # Read a known register (e.g., chip date register or something common)
-    # 0x40001000 is the magic register we just read in detect_chip
+    # Read a known register
     assert {:ok, _} = Esp32.read_reg(uart, 0x40001000)
 
     # Cleanup
@@ -45,12 +49,17 @@ defmodule Esp32.HITLTest do
       uart_port = System.get_env("ESP32_UART_PORT", "/dev/ttyUSB0")
       en_pin = System.get_env("ESP32_EN_PIN", "en")
       io0_pin = System.get_env("ESP32_IO0_PIN", "io0")
-      reset_mode = if en_pin == "auto", do: :auto_reset, else: en_pin
 
-      {:ok, uart} = Esp32.connect(uart_port, reset_mode, io0_pin, use_stub: true)
+      opts =
+        if en_pin == "auto" do
+          [auto_reset: true]
+        else
+          [en_pin: en_pin, io0_pin: io0_pin]
+        end
+
+      {:ok, uart} = Esp32.connect(uart_port, opts ++ [use_stub: true])
 
       # Flash to some offset (e.g., 0x10000)
-      # We use is_stub: true since we connected with use_stub: true
       assert :ok = Esp32.flash_file(uart, bin_path, 0x10000, is_stub: true, reboot: false)
 
       Circuits.UART.close(uart)
