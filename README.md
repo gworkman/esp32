@@ -24,27 +24,22 @@ many development boards, you can use the automatic reset feature via DTR/RTS.
 
 # Option 2: Direct GPIO control (common for custom Nerves hardware)
 {:ok, uart} = Esp32.connect("/dev/ttyS0", en_pin: "en", io0_pin: "io0", baud_rate: 921600)
-```
 
 # Detect the chip family
-
-{:ok, chip} = Esp32.detect_chip(uart) IO.puts("Connected to: #{chip}")
+{:ok, chip} = Esp32.detect_chip(uart)
+IO.puts("Connected to: #{chip}")
 
 # Flash a firmware image to offset 0x10000
-
 :ok = Esp32.flash_file(uart, "path/to/firmware.bin", 0x10000, reboot: true)
 
-```
 # Read a 32-bit register (e.g., chip identification register)
 {:ok, val} = Esp32.read_reg(uart, 0x3FF44000)
 IO.inspect(val, label: "Register Value")
-```
 
 # Close the connection when done
-
 Circuits.UART.close(uart)
+```
 
-````
 ## Installation
 
 Add `esp32` to your list of dependencies in `mix.exs`:
@@ -57,7 +52,7 @@ def deps do
     {:circuits_uart, "~> 1.0"}
   ]
 end
-````
+```
 
 Documentation can be generated with
 [ExDoc](https://github.com/elixir-lang/ex_doc) and published on
