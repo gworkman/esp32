@@ -16,9 +16,10 @@ defmodule Esp32 do
   - `io0_pin`: IO0 (strapping) pin name (ignored if using :auto_reset)
   - `use_stub`: If true, load the flasher stub (default true)
   """
-  @spec connect(String.t(), String.t() | :auto_reset, String.t() | nil, keyword()) :: {:ok, pid()} | {:error, any()}
+  @spec connect(String.t(), String.t() | :auto_reset, String.t() | nil, keyword()) ::
+          {:ok, pid()} | {:error, any()}
   def connect(uart_port, en_pin, io0_pin, opts \\ []) do
-    baud_rate = Keyword.get(opts, :baud_rate, 115200)
+    baud_rate = Keyword.get(opts, :baud_rate, 115_200)
     use_stub = Keyword.get(opts, :use_stub, true)
 
     with {:ok, uart} <- UART.open(uart_port, baud_rate),
@@ -36,7 +37,9 @@ defmodule Esp32 do
   end
 
   defp reset_into_bootloader(uart, :auto_reset, _io0_pin), do: UART.auto_reset(uart)
-  defp reset_into_bootloader(_uart, en_pin, io0_pin), do: GPIO.enter_bootloader_mode(en_pin, io0_pin)
+
+  defp reset_into_bootloader(_uart, en_pin, io0_pin),
+    do: GPIO.enter_bootloader_mode(en_pin, io0_pin)
 
   @doc """
   Synchronizes with the ESP32 bootloader.
@@ -89,7 +92,8 @@ defmodule Esp32 do
     num_packets = div(byte_size(binary) + packet_size - 1, packet_size)
     size_to_erase = byte_size(binary)
 
-    with :ok <- Bootloader.flash_begin(uart, size_to_erase, num_packets, packet_size, offset, is_stub) do
+    with :ok <-
+           Bootloader.flash_begin(uart, size_to_erase, num_packets, packet_size, offset, is_stub) do
       binary
       |> Bootloader.chunk_binary(packet_size)
       |> Enum.with_index()

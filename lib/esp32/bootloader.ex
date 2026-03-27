@@ -65,7 +65,8 @@ defmodule Esp32.Bootloader do
       {:ok, 0x00000009} -> {:ok, :esp32s3}
       {:ok, 0x6F51306F} -> {:ok, :esp32c2}
       {:ok, 0x6921506F} -> {:ok, :esp32c3}
-      {:ok, 0x1B31506F} -> {:ok, :esp32c3} # Alternate C3 value
+      # Alternate C3 value
+      {:ok, 0x1B31506F} -> {:ok, :esp32c3}
       {:ok, 0x2CE1606F} -> {:ok, :esp32c6}
       {:ok, 0xD631606F} -> {:ok, :esp32h2}
       {:ok, other} -> {:ok, {:unknown, other}}
@@ -103,6 +104,7 @@ defmodule Esp32.Bootloader do
   @spec mem_data(pid(), binary(), integer()) :: :ok | {:error, any()}
   def mem_data(uart, data, seq) do
     checksum = Protocol.calculate_checksum(data)
+
     payload = <<
       byte_size(data)::little-32,
       seq::little-32,
@@ -129,7 +131,7 @@ defmodule Esp32.Bootloader do
   @spec mem_end(pid(), integer()) :: :ok | {:error, any()}
   def mem_end(uart, entry_point) do
     data = <<
-      (if entry_point == 0, do: 1, else: 0)::little-32,
+      if(entry_point == 0, do: 1, else: 0)::little-32,
       entry_point::little-32
     >>
 
@@ -175,7 +177,8 @@ defmodule Esp32.Bootloader do
   end
 
   defp upload_segment(uart, data, offset) do
-    block_size = 0x1800 # 6144 bytes
+    # 6144 bytes
+    block_size = 0x1800
     num_blocks = div(byte_size(data) + block_size - 1, block_size)
 
     with :ok <- mem_begin(uart, byte_size(data), num_blocks, block_size, offset) do
@@ -194,6 +197,7 @@ defmodule Esp32.Bootloader do
   @doc false
   def chunk_binary(<<>>, _size), do: []
   def chunk_binary(bin, size) when byte_size(bin) <= size, do: [bin]
+
   def chunk_binary(bin, size) do
     <<chunk::binary-size(size), rest::binary>> = bin
     [chunk | chunk_binary(rest, size)]
@@ -202,7 +206,8 @@ defmodule Esp32.Bootloader do
   @doc """
   Begins a flash operation.
   """
-  @spec flash_begin(pid(), integer(), integer(), integer(), integer(), boolean()) :: :ok | {:error, any()}
+  @spec flash_begin(pid(), integer(), integer(), integer(), integer(), boolean()) ::
+          :ok | {:error, any()}
   def flash_begin(uart, size_to_erase, num_packets, packet_size, offset, is_stub \\ false) do
     data = <<
       size_to_erase::little-32,
@@ -215,7 +220,8 @@ defmodule Esp32.Bootloader do
     encoded = SLIP.encode(cmd)
 
     with :ok <- UART.write(uart, encoded),
-         {:ok, response} <- UART.read_packet(uart, 5000), # Erase can take time
+         # Erase can take time
+         {:ok, response} <- UART.read_packet(uart, 5000),
          {:ok, decoded} <- SLIP.decode(response),
          {:ok, _cmd_id, _val, resp_data} <- Protocol.parse_response(decoded),
          {:ok, _} <- Protocol.parse_status(resp_data, is_stub) do
@@ -229,6 +235,7 @@ defmodule Esp32.Bootloader do
   @spec flash_data(pid(), binary(), integer(), boolean()) :: :ok | {:error, any()}
   def flash_data(uart, data, seq, is_stub \\ false) do
     checksum = Protocol.calculate_checksum(data)
+
     payload = <<
       byte_size(data)::little-32,
       seq::little-32,

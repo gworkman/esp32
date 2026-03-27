@@ -1,5 +1,6 @@
 defmodule Esp32.HITLTest do
   use ExUnit.Case
+
   @moduledoc """
   Hardware-In-The-Loop tests for ESP32 bootloader.
   These tests require an actual ESP32 connected to the system.

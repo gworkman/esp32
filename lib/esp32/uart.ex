@@ -9,7 +9,7 @@ defmodule Esp32.UART do
   Opens the UART port for communication with the ESP32.
   """
   @spec open(String.t(), pos_integer()) :: {:ok, pid()} | {:error, any()}
-  def open(port, baud_rate \\ 115200) do
+  def open(port, baud_rate \\ 115_200) do
     with {:ok, uart} <- UART.start_link() do
       case UART.open(uart, port, speed: baud_rate, active: false) do
         :ok -> {:ok, uart}
@@ -74,9 +74,12 @@ defmodule Esp32.UART do
 
   defp read_until_frame(uart, acc, timeout) do
     case UART.read(uart, timeout) do
-      {:ok, <<>>} -> {:error, :timeout}
+      {:ok, <<>>} ->
+        {:error, :timeout}
+
       {:ok, data} ->
         new_acc = acc <> data
+
         if String.contains?(new_acc, <<0xC0>>) and byte_size(new_acc) > 1 do
           # This assumes we get the full packet and it's framed.
           # More complex buffering is needed for real-world serial.
@@ -84,7 +87,9 @@ defmodule Esp32.UART do
         else
           read_until_frame(uart, new_acc, timeout)
         end
-      error -> error
+
+      error ->
+        error
     end
   end
 end

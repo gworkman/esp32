@@ -68,7 +68,9 @@ defmodule Esp32.Protocol do
   Returns `{:ok, command_id, value, data}` or `{:error, reason}`.
   """
   @spec parse_response(binary()) :: {:ok, integer(), integer(), binary()} | {:error, atom()}
-  def parse_response(<<0x01, command_id, size::little-16, value::little-32, data::binary-size(size)>>) do
+  def parse_response(
+        <<0x01, command_id, size::little-16, value::little-32, data::binary-size(size)>>
+      ) do
     {:ok, command_id, value, data}
   end
 
