@@ -17,23 +17,28 @@ reset and strapping pins to automate entry into bootloader mode.
 
 To use `Esp32`, you need to know the UART port and the GPIO pins used for
 reset and bootloader entry. For many development boards, you can use the
-automatic reset feature.
+automatic reset feature. By default, it will attempt to load a flasher stub
+for better performance.
 
 ```elixir
 # Option 1: Automatic reset (common for devboards via DTR/RTS)
-{:ok, uart} = Esp32.connect("/dev/ttyUSB0", :auto_reset, nil)
+{:ok, uart} = Esp32.connect("/dev/ttyUSB0", :auto_reset, nil, use_stub: true)
 
 # Option 2: Direct GPIO control (common for custom Nerves hardware)
-{:ok, uart} = Esp32.connect("/dev/ttyS0", "en_pin_name", "io0_pin_name")
-
+{:ok, uart} = Esp32.connect("/dev/ttyS0", "en_pin_name", "io0_pin_name", baud_rate: 921600)
+```
 # Detect the chip family
 {:ok, chip} = Esp32.detect_chip(uart)
 IO.puts("Connected to: #{chip}")
+
+# Flash a firmware image to offset 0x10000
+:ok = Esp32.flash_file(uart, "path/to/firmware.bin", 0x10000, reboot: true)
 ```
+
 # Read a 32-bit register (e.g., chip identification register)
 {:ok, val} = Esp32.read_reg(uart, 0x3FF44000)
 IO.inspect(val, label: "Register Value")
-
+```
 # Close the connection when done
 Circuits.UART.close(uart)
 ```

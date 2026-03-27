@@ -82,15 +82,24 @@ defmodule Esp32.Protocol do
 
   @doc """
   Extracts status and error from the response data.
-  ESP32 ROM uses 4 status bytes at the end of the data payload.
-  """
-  @spec parse_status(binary()) :: {:ok, binary()} | {:error, {integer(), integer()}}
-  def parse_status(data) do
-    size = byte_size(data)
 
-    if size >= 4 do
-      payload_size = size - 4
-      <<payload::binary-size(payload_size), status, error, _reserved::16>> = data
+  Options:
+  - `is_stub`: If true, assumes 2 status bytes (Stub loader). If false, 4 status bytes (ROM loader).
+  """
+  @spec parse_status(binary(), boolean()) :: {:ok, binary()} | {:error, {integer(), integer()}}
+  def parse_status(data, is_stub \\ false) do
+    size = byte_size(data)
+    status_len = if is_stub, do: 2, else: 4
+
+    if size >= status_len do
+      payload_size = size - status_len
+      <<payload::binary-size(payload_size), status_bytes::binary>> = data
+
+      {status, error} =
+        case status_bytes do
+          <<status, error, _reserved::16>> -> {status, error}
+          <<status, error>> -> {status, error}
+        end
 
       if status == 0 do
         {:ok, payload}

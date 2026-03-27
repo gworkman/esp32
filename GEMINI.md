@@ -13,8 +13,8 @@ strapping pins of the device to force entry into bootloader mode
 - All pins and ports should be configurable via application config (but since
   this is targetting Nerves devices, we can assume the UART port is always the
   same)
-- Document all public functions with @spec and @doc (describe keyword options if
-  necessary)
+- Document all public functions with `@spec` and `@doc` (describe keyword
+  options if necessary)
 
 ## Tools
 

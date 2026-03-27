@@ -14,13 +14,24 @@ defmodule Esp32 do
   - `baud_rate`: Baud rate for communication (default 115200)
   - `en_pin`: EN (reset) pin name, or :auto_reset for UART signal-based reset
   - `io0_pin`: IO0 (strapping) pin name (ignored if using :auto_reset)
+  - `use_stub`: If true, load the flasher stub (default true)
   """
-  @spec connect(String.t(), String.t() | :auto_reset, String.t() | nil, pos_integer()) :: {:ok, pid()} | {:error, any()}
-  def connect(uart_port, en_pin, io0_pin, baud_rate \\ 115200) do
+  @spec connect(String.t(), String.t() | :auto_reset, String.t() | nil, keyword()) :: {:ok, pid()} | {:error, any()}
+  def connect(uart_port, en_pin, io0_pin, opts \\ []) do
+    baud_rate = Keyword.get(opts, :baud_rate, 115200)
+    use_stub = Keyword.get(opts, :use_stub, true)
+
     with {:ok, uart} <- UART.open(uart_port, baud_rate),
          :ok <- reset_into_bootloader(uart, en_pin, io0_pin),
          :ok <- Bootloader.sync(uart) do
-      {:ok, uart}
+      if use_stub do
+        with {:ok, chip_family} <- Bootloader.detect_chip(uart),
+             :ok <- Bootloader.load_stub(uart, chip_family) do
+          {:ok, uart}
+        end
+      else
+        {:ok, uart}
+      end
     end
   end
 
@@ -43,19 +54,59 @@ defmodule Esp32 do
   defdelegate detect_chip(uart), to: Bootloader
 
   @doc """
-  Flashes a binary file to the ESP32. (Incomplete implementation example).
+  Parses an ESP32 firmware image (.bin).
   """
-  @spec flash(pid(), binary(), integer()) :: :ok | {:error, any()}
-  def flash(uart, binary, offset) do
-    # Placeholder for actual flash loop logic.
-    # Should implement flash_begin, chunking data, flash_data, and flash_end.
-    packet_size = 1024
+  defdelegate parse_image(binary), to: Esp32.Image, as: :parse
+
+  @doc """
+  Flashes a firmware image file (.bin) to the ESP32.
+
+  This function reads the file from disk, performs a safety check to ensure
+  it is a valid ESP32 image, and then flashes it.
+  """
+  @spec flash_file(pid(), String.t(), integer(), keyword()) :: :ok | {:error, any()}
+  def flash_file(uart, path, offset, opts \\ []) do
+    with {:ok, binary} <- File.read(path),
+         {:ok, _metadata, _footer} <- parse_image(binary) do
+      # Optional: could check if metadata.chip_id matches detected chip here
+      flash(uart, binary, offset, opts)
+    end
+  end
+
+  @doc """
+  Flashes a binary file to the ESP32.
+
+  Options:
+  - `is_stub`: If true, assumes stub loader protocol (default true)
+  - `reboot`: If true, reboots after flashing (default false)
+  """
+  @spec flash(pid(), binary(), integer(), keyword()) :: :ok | {:error, any()}
+  def flash(uart, binary, offset, opts \\ []) do
+    is_stub = Keyword.get(opts, :is_stub, true)
+    # 16KB for stub, 1KB for ROM
+    packet_size = if is_stub, do: 0x4000, else: 0x400
+
     num_packets = div(byte_size(binary) + packet_size - 1, packet_size)
     size_to_erase = byte_size(binary)
 
-    with :ok <- Bootloader.flash_begin(uart, size_to_erase, num_packets, packet_size, offset) do
-      # Loop through binary in chunks...
-      :ok
+    with :ok <- Bootloader.flash_begin(uart, size_to_erase, num_packets, packet_size, offset, is_stub) do
+      binary
+      |> Bootloader.chunk_binary(packet_size)
+      |> Enum.with_index()
+      |> Enum.reduce_while(:ok, fn {chunk, seq}, :ok ->
+        case Bootloader.flash_data(uart, chunk, seq, is_stub) do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
+      |> case do
+        :ok ->
+          reboot = Keyword.get(opts, :reboot, false)
+          Bootloader.flash_end(uart, reboot, is_stub)
+
+        error ->
+          error
+      end
     end
   end
 end
