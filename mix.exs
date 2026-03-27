@@ -25,8 +25,8 @@ defmodule Esp32.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:tidewave, "~> 0.5", only: [:dev]},
-      {:bandit, "~> 1.0", only: [:dev]},
+      {:tidewave, "~> 0.5"},
+      {:bandit, "~> 1.0"},
       {:circuits_gpio, "~> 2.0"},
       {:circuits_uart, "~> 1.0"}
     ]
