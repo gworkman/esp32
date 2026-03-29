@@ -29,7 +29,7 @@ defmodule Esp32 do
          :ok <- reset_into_bootloader(uart, opts),
          :ok <- Bootloader.sync(uart) do
       if use_stub do
-        with {:ok, chip_family} <- Bootloader.detect_chip(uart),
+        with {:ok, chip_family} <- Bootloader.detect_chip(uart, false),
              :ok <- Bootloader.load_stub(uart, chip_family) do
           {:ok, uart}
         end
@@ -100,11 +100,11 @@ defmodule Esp32 do
     num_packets = div(byte_size(binary) + packet_size - 1, packet_size)
     size_to_erase = byte_size(binary)
 
-    with :ok <-
+    with :ok <- if(is_stub, do: :ok, else: Bootloader.spi_attach(uart, is_stub)),
+         :ok <-
            Bootloader.flash_begin(uart, size_to_erase, num_packets, packet_size, offset, is_stub) do
       binary
-      |> Bootloader.chunk_binary(packet_size)
-      |> Enum.with_index()
+      |> pad_and_chunk(packet_size)
       |> Enum.reduce_while(:ok, fn {chunk, seq}, :ok ->
         case Bootloader.flash_data(uart, chunk, seq, is_stub) do
           :ok -> {:cont, :ok}
@@ -120,5 +120,20 @@ defmodule Esp32 do
           error
       end
     end
+  end
+
+  # Pads the binary to a multiple of block_size with 0xFF, then chunks it.
+  # The ESP32 flash protocol requires the last block to be padded.
+  defp pad_and_chunk(binary, block_size) do
+    remainder = rem(byte_size(binary), block_size)
+
+    padded =
+      if remainder == 0,
+        do: binary,
+        else: binary <> :binary.copy(<<0xFF>>, block_size - remainder)
+
+    padded
+    |> Bootloader.chunk_binary(block_size)
+    |> Enum.with_index()
   end
 end

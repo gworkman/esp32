@@ -63,12 +63,23 @@ defmodule Esp32.UART do
   end
 
   @doc """
+  Drains any pending data from the UART receive buffer.
+  """
+  @spec drain(pid(), pos_integer()) :: :ok
+  def drain(uart, timeout \\ 100) do
+    case UART.read(uart, timeout) do
+      {:ok, <<>>} -> :ok
+      {:ok, _} -> drain(uart, timeout)
+      _ -> :ok
+    end
+  end
+
+  @doc """
   Reads a SLIP-framed packet from the UART port.
+  Waits for a complete frame delimited by 0xC0 start and end markers.
   """
   @spec read_packet(pid(), pos_integer()) :: {:ok, binary()} | {:error, any()}
   def read_packet(uart, timeout \\ 1000) do
-    # This is a simplified read logic for SLIP packets.
-    # In a real scenario, we would buffer data until we see the 0xC0 end markers.
     read_until_frame(uart, <<>>, timeout)
   end
 
@@ -80,16 +91,40 @@ defmodule Esp32.UART do
       {:ok, data} ->
         new_acc = acc <> data
 
-        if String.contains?(new_acc, <<0xC0>>) and byte_size(new_acc) > 1 do
-          # This assumes we get the full packet and it's framed.
-          # More complex buffering is needed for real-world serial.
-          {:ok, new_acc}
-        else
-          read_until_frame(uart, new_acc, timeout)
+        case find_frame(new_acc) do
+          {:ok, frame} -> {:ok, frame}
+          :incomplete -> read_until_frame(uart, new_acc, timeout)
         end
 
       error ->
         error
+    end
+  end
+
+  # Finds a complete SLIP frame (0xC0 <content> 0xC0) in the accumulated data.
+  # Skips any garbage before the first 0xC0 and any empty frames from
+  # consecutive 0xC0 markers.
+  defp find_frame(data) do
+    case :binary.match(data, <<0xC0>>) do
+      :nomatch ->
+        :incomplete
+
+      {pos, 1} ->
+        after_start = pos + 1
+        rest = binary_part(data, after_start, byte_size(data) - after_start)
+
+        case :binary.match(rest, <<0xC0>>) do
+          :nomatch ->
+            :incomplete
+
+          {0, 1} ->
+            # Consecutive 0xC0 bytes (empty frame), skip and keep looking
+            find_frame(rest)
+
+          {end_pos, 1} ->
+            content = binary_part(rest, 0, end_pos)
+            {:ok, <<0xC0, content::binary, 0xC0>>}
+        end
     end
   end
 end
