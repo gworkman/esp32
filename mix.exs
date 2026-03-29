@@ -22,7 +22,8 @@ defmodule Esp32.MixProject do
   defp deps do
     [
       {:circuits_gpio, "~> 2.0"},
-      {:circuits_uart, "~> 1.0"}
+      {:circuits_uart, "~> 1.0"},
+      {:jason, "~> 1.0"}
     ]
   end
 end

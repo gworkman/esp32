@@ -13,33 +13,38 @@ defmodule Esp32.Bootloader do
   @spec sync(pid()) :: :ok | {:error, any()}
   def sync(uart) do
     # 36 bytes: 0x07 0x07 0x12 0x20, followed by 32 x 0x55
-    sync_payload = <<0x07, 0x07, 0x12, 0x20, List.duplicate(0x55, 32)::binary>>
+    sync_payload = <<0x07, 0x07, 0x12, 0x20>> <> :binary.copy(<<0x55>>, 32)
     cmd = Protocol.build_command(:SYNC, 0, sync_payload)
     encoded = SLIP.encode(cmd)
 
+    # Drain boot ROM garbage (sent at 74880 baud, appears as noise at 115200)
+    UART.drain(uart)
+
     # Sending sync multiple times is often necessary
-    do_sync(uart, encoded, 5)
+    do_sync(uart, encoded, 7)
   end
 
   defp do_sync(_uart, _encoded, 0), do: {:error, :sync_failed}
 
   defp do_sync(uart, encoded, attempts) do
     with :ok <- UART.write(uart, encoded),
-         {:ok, response} <- UART.read_packet(uart, 200),
+         {:ok, response} <- UART.read_packet(uart, 500),
          {:ok, decoded} <- SLIP.decode(response),
          {:ok, _cmd_id, _val, data} <- Protocol.parse_response(decoded),
          {:ok, _} <- Protocol.parse_status(data) do
       :ok
     else
-      _ -> do_sync(uart, encoded, attempts - 1)
+      _ ->
+        UART.drain(uart)
+        do_sync(uart, encoded, attempts - 1)
     end
   end
 
   @doc """
   Reads a 32-bit register from the ESP32.
   """
-  @spec read_reg(pid(), integer()) :: {:ok, integer()} | {:error, any()}
-  def read_reg(uart, address) do
+  @spec read_reg(pid(), integer(), boolean()) :: {:ok, integer()} | {:error, any()}
+  def read_reg(uart, address, is_stub \\ true) do
     cmd = Protocol.build_command(:READ_REG, 0, <<address::little-32>>)
     encoded = SLIP.encode(cmd)
 
@@ -47,7 +52,7 @@ defmodule Esp32.Bootloader do
          {:ok, response} <- UART.read_packet(uart),
          {:ok, decoded} <- SLIP.decode(response),
          {:ok, _cmd_id, val, data} <- Protocol.parse_response(decoded),
-         {:ok, _} <- Protocol.parse_status(data) do
+         {:ok, _} <- Protocol.parse_status(data, is_stub) do
       {:ok, val}
     end
   end
@@ -55,10 +60,10 @@ defmodule Esp32.Bootloader do
   @doc """
   Detects the connected chip type by reading the magic register.
   """
-  @spec detect_chip(pid()) :: {:ok, atom()} | {:error, any()}
-  def detect_chip(uart) do
+  @spec detect_chip(pid(), boolean()) :: {:ok, atom()} | {:error, any()}
+  def detect_chip(uart, is_stub \\ true) do
     # 0x40001000 is the common magic register address for chip detection
-    case read_reg(uart, 0x40001000) do
+    case read_reg(uart, 0x40001000, is_stub) do
       {:ok, 0xFFF0C101} -> {:ok, :esp8266}
       {:ok, 0x00F01D83} -> {:ok, :esp32}
       {:ok, 0x000007C6} -> {:ok, :esp32s2}
@@ -68,6 +73,7 @@ defmodule Esp32.Bootloader do
       # Alternate C3 value
       {:ok, 0x1B31506F} -> {:ok, :esp32c3}
       {:ok, 0x2CE1606F} -> {:ok, :esp32c6}
+      {:ok, 0x2CE0806F} -> {:ok, :esp32c6}
       {:ok, 0xD631606F} -> {:ok, :esp32h2}
       {:ok, other} -> {:ok, {:unknown, other}}
       error -> error
@@ -151,8 +157,11 @@ defmodule Esp32.Bootloader do
   Loads the flasher stub into RAM and starts it.
   """
   @spec load_stub(pid(), atom()) :: :ok | {:error, any()}
-  def load_stub(uart, chip_family) do
-    stub_path = "priv/stubs/#{chip_family}.json"
+  def load_stub(_uart, {:unknown, magic}),
+    do: {:error, {:unsupported_chip, magic}}
+
+  def load_stub(uart, chip_family) when is_atom(chip_family) do
+    stub_path = Application.app_dir(:esp32, "priv/stubs/#{chip_family}.json")
 
     with {:ok, json} <- File.read(stub_path),
          {:ok, stub} <- Jason.decode(json) do
@@ -204,6 +213,25 @@ defmodule Esp32.Bootloader do
   end
 
   @doc """
+  Attaches to SPI flash. Required before flash operations on the ROM loader,
+  optional on the stub.
+  """
+  @spec spi_attach(pid(), boolean()) :: :ok | {:error, any()}
+  def spi_attach(uart, is_stub \\ false) do
+    # 0 = default SPI flash interface
+    cmd = Protocol.build_command(:SPI_ATTACH, 0, <<0::little-32, 0::little-32>>)
+    encoded = SLIP.encode(cmd)
+
+    with :ok <- UART.write(uart, encoded),
+         {:ok, response} <- UART.read_packet(uart),
+         {:ok, decoded} <- SLIP.decode(response),
+         {:ok, _cmd_id, _val, resp_data} <- Protocol.parse_response(decoded),
+         {:ok, _} <- Protocol.parse_status(resp_data, is_stub) do
+      :ok
+    end
+  end
+
+  @doc """
   Begins a flash operation.
   """
   @spec flash_begin(pid(), integer(), integer(), integer(), integer(), boolean()) ::
@@ -247,8 +275,13 @@ defmodule Esp32.Bootloader do
     cmd = Protocol.build_command(:FLASH_DATA, checksum, payload)
     encoded = SLIP.encode(cmd)
 
+    # At 115200 baud, 16KB takes ~1.4s on the wire. The response only arrives
+    # after the ESP32 receives the full SLIP frame, so the read timeout must
+    # account for serial transmission time of the encoded payload.
+    timeout = max(3000, div(byte_size(encoded) * 12, 115) + 1000)
+
     with :ok <- UART.write(uart, encoded),
-         {:ok, response} <- UART.read_packet(uart),
+         {:ok, response} <- UART.read_packet(uart, timeout),
          {:ok, decoded} <- SLIP.decode(response),
          {:ok, _cmd_id, _val, resp_data} <- Protocol.parse_response(decoded),
          {:ok, _} <- Protocol.parse_status(resp_data, is_stub) do
