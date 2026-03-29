@@ -29,8 +29,21 @@ many development boards, you can use the automatic reset feature via DTR/RTS.
 {:ok, chip} = Esp32.detect_chip(uart)
 IO.puts("Connected to: #{chip}")
 
-# Flash a firmware image to offset 0x10000
-:ok = Esp32.flash_file(uart, "path/to/firmware.bin", 0x10000, reboot: true)
+##### FLASH FIRMWARE ####
+
+# Bootloader - valid ESP32 image, flash_file is fine                                               
+Esp32.flash_file(uart, "bootloader.bin", 0x0)                                                      
+                                               
+# Partition table - raw data, use flash/4                                                          
+{:ok, bin} = File.read("partition-table.bin")  
+Esp32.flash(uart, bin, 0x8000)                                                                     
+                                                 
+# OTA data - raw data, use flash/4                                                                 
+{:ok, bin} = File.read("ota_data_initial.bin")
+Esp32.flash(uart, bin, 0xd000)                                                                     
+                                                 
+# App firmware - valid ESP32 image, reboot after                                                   
+Esp32.flash_file(uart, "network_adapter.bin", 0x10000, reboot: true)
 
 # Read a 32-bit register (e.g., chip identification register)
 {:ok, val} = Esp32.read_reg(uart, 0x3FF44000)
