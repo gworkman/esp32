@@ -34,39 +34,15 @@ IO.puts("Connected to: #{chip}")
 
 When calling `Esp32.connect/2`, you can specify several options:
 
-* `:initial_baud_rate` - The baud rate used for the initial synchronization and
+- `:initial_baud_rate` - The baud rate used for the initial synchronization and
   loading the flasher stub (default: 115200).
-* `:baud_rate` - The target baud rate to use after the flasher stub is loaded.
+- `:baud_rate` - The target baud rate to use after the flasher stub is loaded.
   This is typically much higher (e.g., 921600) to speed up flashing.
-* `:auto_reset` - When set to `true`, the library will use the DTR and RTS lines
-  to automatically put the ESP32 into bootloader mode. This is common for most
+- `:auto_reset` - When set to `true`, the library will use the DTR and RTS lines
+  to automatically put the ESP32 into bootloader mode. This is common for many
   USB-based development boards.
-* `:en_pin` and `:io0_pin` - GPIO pin names to use for manual reset and strapping
-  pin control (e.g., for custom Nerves hardware).
-
-##### FLASH FIRMWARE ####
-
-# Bootloader - valid ESP32 image, flash_file is fine                                               
-Esp32.flash_file(uart, "bootloader.bin", 0x0)                                                      
-                                               
-# Partition table - raw data, use flash/4                                                          
-{:ok, bin} = File.read("partition-table.bin")  
-Esp32.flash(uart, bin, 0x8000)                                                                     
-                                                 
-# OTA data - raw data, use flash/4                                                                 
-{:ok, bin} = File.read("ota_data_initial.bin")
-Esp32.flash(uart, bin, 0xd000)                                                                     
-                                                 
-# App firmware - valid ESP32 image, reboot after                                                   
-Esp32.flash_file(uart, "network_adapter.bin", 0x10000, reboot: true)
-
-# Read a 32-bit register (e.g., chip identification register)
-{:ok, val} = Esp32.read_reg(uart, 0x3FF44000)
-IO.inspect(val, label: "Register Value")
-
-# Close the connection when done
-Circuits.UART.close(uart)
-```
+- `:en_pin` and `:io0_pin` - GPIO pin names to use for manual reset and
+  strapping pin control (e.g., for custom Nerves hardware).
 
 ## Installation
 
