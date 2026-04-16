@@ -1,12 +1,16 @@
 defmodule Esp32.UART do
   @moduledoc """
   Serial communication wrapper for ESP32 bootloader.
+
+  Handles framing, echoing, and hardware reset sequences.
   """
 
   alias Circuits.UART
 
   @doc """
   Opens the UART port for communication with the ESP32.
+
+  Default baud rate is 115200.
   """
   @spec open(String.t(), pos_integer()) :: {:ok, pid()} | {:error, any()}
   def open(port, baud_rate \\ 115_200) do
@@ -25,6 +29,21 @@ defmodule Esp32.UART do
   def write(uart, data), do: UART.write(uart, data)
 
   @doc """
+  Closes the UART port and stops the UART process.
+  """
+  @spec close(pid()) :: :ok
+  def close(uart) do
+    UART.close(uart)
+    GenServer.stop(uart)
+  end
+
+  @doc """
+  Reconfigures the UART port settings (e.g., baud rate).
+  """
+  @spec configure(pid(), keyword()) :: :ok | {:error, any()}
+  def configure(uart, opts), do: UART.configure(uart, opts)
+
+  @doc """
   Sets the DTR (Data Terminal Ready) signal.
   Note: True usually means asserted (0V on most USB-serial chips).
   """
@@ -40,7 +59,8 @@ defmodule Esp32.UART do
 
   @doc """
   Performs the automatic reset sequence using DTR and RTS.
-  This is used by many ESP32 devboards.
+  This is used by many ESP32 devboards where DTR and RTS are connected
+  to the EN and IO0 pins via a transistor circuit.
 
   Sequence:
   1. DTR=False, RTS=True  (IO0=1, EN=0 -> Reset)
@@ -63,6 +83,31 @@ defmodule Esp32.UART do
   end
 
   @doc """
+  Performs a reset sequence specialized for built-in USB JTAG/Serial interfaces.
+
+  Newer ESP32 chips (like C3, S3) have an internal USB JTAG/Serial peripheral
+  that requires a specific toggle sequence on DTR/RTS to enter bootloader mode.
+  """
+  @spec usb_jtag_serial_reset(pid()) :: :ok | {:error, any()}
+  def usb_jtag_serial_reset(uart) do
+    # Sequence based on esptool.py for USB JTAG Serial
+    with :ok <- set_rts(uart, false),
+         :ok <- set_dtr(uart, false),
+         _ <- Process.sleep(100),
+         :ok <- set_dtr(uart, true),
+         :ok <- set_rts(uart, false),
+         _ <- Process.sleep(100),
+         :ok <- set_rts(uart, true),
+         :ok <- set_dtr(uart, false),
+         :ok <- set_rts(uart, true),
+         _ <- Process.sleep(100),
+         :ok <- set_dtr(uart, false),
+         :ok <- set_rts(uart, false) do
+      :ok
+    end
+  end
+
+  @doc """
   Drains any pending data from the UART receive buffer.
   """
   @spec drain(pid(), pos_integer()) :: :ok
@@ -76,11 +121,28 @@ defmodule Esp32.UART do
 
   @doc """
   Reads a SLIP-framed packet from the UART port.
-  Waits for a complete frame delimited by 0xC0 start and end markers.
+
+  Waits for a complete frame delimited by `0xC0` start and end markers.
+  Automatically skips echoed commands (packets starting with `0x00`) which
+  commonly occur on certain USB interfaces.
   """
   @spec read_packet(pid(), pos_integer()) :: {:ok, binary()} | {:error, any()}
   def read_packet(uart, timeout \\ 1000) do
-    read_until_frame(uart, <<>>, timeout)
+    case read_until_frame(uart, <<>>, timeout) do
+      {:ok, frame} ->
+        # Check if it's an echoed command (starts with 0x00)
+        case Esp32.SLIP.decode(frame) do
+          {:ok, <<0x00, _::binary>>} ->
+            # Skip echo and try again
+            read_packet(uart, timeout)
+
+          _ ->
+            {:ok, frame}
+        end
+
+      error ->
+        error
+    end
   end
 
   defp read_until_frame(uart, acc, timeout) do

@@ -10,28 +10,56 @@ defmodule Esp32 do
   @doc """
   Connects to an ESP32 device, puts it in bootloader mode, and synchronizes.
 
-  @doc \"""
-  Connects to an ESP32 device, puts it in bootloader mode, and synchronizes.
-
   Options:
-  - `:baud_rate` - Baud rate for communication (default 115200)
+  - `:baud_rate` - Final baud rate for communication (default 115200)
+  - `:initial_baud_rate` - Initial sync baud rate used for loading the flasher stub (default 115200)
   - `:use_stub` - If true, load the flasher stub (default true)
   - `:auto_reset` - If true, use UART DTR/RTS signals for reset (default false)
-  - `:en_pin` - EN (reset) pin name (required if not using :auto_reset)
-  - `:io0_pin` - IO0 (strapping) pin name (required if not using :auto_reset)
+  - `:en_pin` - GPIO pin name for EN (reset) (required if not using :auto_reset)
+  - `:io0_pin` - GPIO pin name for IO0 (boot mode) (required if not using :auto_reset)
+
+  If `uart_port` is "auto", the library will attempt to find a connected ESP32.
   """
   @spec connect(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
-  def connect(uart_port, opts \\ []) do
-    baud_rate = Keyword.get(opts, :baud_rate, 115_200)
+  def connect("auto", opts) do
+    case find_port() do
+      {:ok, port} -> connect(port, opts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec connect(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
+  def connect(uart_port, opts) do
+    initial_baud = Keyword.get(opts, :initial_baud_rate, 115_200)
+    final_baud = Keyword.get(opts, :baud_rate, initial_baud)
     use_stub = Keyword.get(opts, :use_stub, true)
 
-    with {:ok, uart} <- UART.open(uart_port, baud_rate),
-         :ok <- reset_into_bootloader(uart, opts),
+    with {:ok, uart} <- UART.open(uart_port, initial_baud) do
+      case do_connect(uart, opts, use_stub, initial_baud, final_baud) do
+        {:ok, uart} -> {:ok, uart}
+        error ->
+          UART.close(uart)
+          error
+      end
+    end
+  end
+
+  defp do_connect(uart, opts, use_stub, initial_baud, final_baud) do
+    with :ok <- reset_into_bootloader(uart, opts),
          :ok <- Bootloader.sync(uart) do
       if use_stub do
         with {:ok, chip_family} <- Bootloader.detect_chip(uart, false),
              :ok <- Bootloader.load_stub(uart, chip_family) do
-          {:ok, uart}
+          # Switch baud rate if requested
+          if final_baud != initial_baud do
+            with :ok <- Bootloader.change_baud(uart, final_baud, initial_baud),
+                 :ok <- UART.configure(uart, speed: final_baud) do
+              UART.drain(uart)
+              {:ok, uart}
+            end
+          else
+            {:ok, uart}
+          end
         end
       else
         {:ok, uart}
@@ -39,9 +67,46 @@ defmodule Esp32 do
     end
   end
 
+  @doc """
+  Attempts to find a connected ESP32 or USB-to-Serial bridge.
+
+  Returns `{:ok, port}` if found, or `{:error, :no_port_found}`.
+  """
+  @spec find_port() :: {:ok, String.t()} | {:error, :no_port_found}
+  def find_port do
+    # Known Vendor/Product IDs
+    # Espressif USB JTAG/Serial: 0x303A:0x1001
+    # CP210x: 0x10C4:0xEA60
+    # CH340: 0x1A86:0x7523
+    # FTDI: 0x0403:0x6001
+    Circuits.UART.enumerate()
+    |> Enum.find(fn {_port, info} ->
+      vid = Map.get(info, :vendor_id)
+      pid = Map.get(info, :product_id)
+
+      is_espressif?(vid, pid) or is_known_bridge?(vid, pid)
+    end)
+    |> case do
+      {port, _info} -> {:ok, port}
+      nil -> {:error, :no_port_found}
+    end
+  end
+
+  defp is_espressif?(0x303A, _), do: true # Espressif VID
+  defp is_espressif?(_, _), do: false
+
+  defp is_known_bridge?(0x10C4, _), do: true # Silicon Labs CP210x VID
+  defp is_known_bridge?(0x1A86, _), do: true # QinHeng CH340 VID
+  defp is_known_bridge?(0x0403, _), do: true # FTDI VID
+  defp is_known_bridge?(_, _), do: false
+
   defp reset_into_bootloader(uart, opts) do
     if Keyword.get(opts, :auto_reset, false) do
-      UART.auto_reset(uart)
+      # Use specialized USB reset if it looks like an Espressif built-in USB JTAG/Serial
+      case Circuits.UART.enumerate() |> Enum.find(fn {_, info} -> Map.get(info, :vendor_id) == 0x303A end) do
+        {_port, _info} -> UART.usb_jtag_serial_reset(uart)
+        _ -> UART.auto_reset(uart)
+      end
     else
       en_pin = Keyword.get(opts, :en_pin)
       io0_pin = Keyword.get(opts, :io0_pin)
@@ -52,21 +117,25 @@ defmodule Esp32 do
   @doc """
   Synchronizes with the ESP32 bootloader.
   """
+  @spec sync(pid()) :: :ok | {:error, any()}
   defdelegate sync(uart), to: Bootloader
 
   @doc """
   Reads a 32-bit register from the ESP32.
   """
+  @spec read_reg(pid(), integer()) :: {:ok, integer()} | {:error, any()}
   defdelegate read_reg(uart, address), to: Bootloader
 
   @doc """
   Detects the connected ESP32 chip type.
   """
+  @spec detect_chip(pid()) :: {:ok, atom()} | {:error, any()}
   defdelegate detect_chip(uart), to: Bootloader
 
   @doc """
   Parses an ESP32 firmware image (.bin).
   """
+  @spec parse_image(binary()) :: {:ok, map(), binary()} | {:error, any()}
   defdelegate parse_image(binary), to: Esp32.Image, as: :parse
 
   @doc """
@@ -74,6 +143,10 @@ defmodule Esp32 do
 
   This function reads the file from disk, performs a safety check to ensure
   it is a valid ESP32 image, and then flashes it.
+
+  Options:
+  - `:is_stub` - Use stub protocol (default true)
+  - `:reboot` - Reboot after flash (default false)
   """
   @spec flash_file(pid(), String.t(), integer(), keyword()) :: :ok | {:error, any()}
   def flash_file(uart, path, offset, opts \\ []) do
@@ -85,11 +158,11 @@ defmodule Esp32 do
   end
 
   @doc """
-  Flashes a binary file to the ESP32.
+  Flashes a binary to the ESP32.
 
   Options:
-  - `is_stub`: If true, assumes stub loader protocol (default true)
-  - `reboot`: If true, reboots after flashing (default false)
+  - `:is_stub` - Use stub protocol (default true)
+  - `:reboot` - Reboot after flash (default false)
   """
   @spec flash(pid(), binary(), integer(), keyword()) :: :ok | {:error, any()}
   def flash(uart, binary, offset, opts \\ []) do

@@ -1,6 +1,12 @@
 defmodule Esp32.Image do
   @moduledoc """
   Parser and validator for ESP32 firmware image files (.bin).
+
+  The ESP32 firmware image format consists of:
+  - A main header (8 bytes) including a magic byte (0xE9)
+  - An extended header (16 bytes) containing chip and revision info
+  - One or more segments, each with a header (8 bytes) followed by data
+  - A footer containing a checksum and optionally a SHA256 hash
   """
 
   import Bitwise
@@ -20,9 +26,12 @@ defmodule Esp32.Image do
   }
 
   @doc """
-  Parses the firmware image and returns metadata and segments.
+  Parses the firmware image and returns metadata, segments, and the footer.
+
+  The return value is `{:ok, metadata, footer}` where `metadata` contains the
+  parsed headers and segments.
   """
-  @spec parse(binary()) :: {:ok, map()} | {:error, any()}
+  @spec parse(binary()) :: {:ok, map(), binary()} | {:error, any()}
   def parse(
         <<@magic, segments_count, flash_mode, size_freq, entry_point::little-32, rest::binary>>
       ) do
