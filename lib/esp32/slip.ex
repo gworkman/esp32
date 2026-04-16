@@ -1,6 +1,12 @@
 defmodule Esp32.SLIP do
   @moduledoc """
   SLIP (Serial Line Internet Protocol) encoding and decoding for the ESP32 bootloader.
+
+  The ESP32 bootloader uses SLIP framing to delimit packets.
+  - `0xC0` is used as the end-of-frame marker.
+  - `0xDB` is the escape character.
+  - `0xDB 0xDC` encodes a literal `0xC0`.
+  - `0xDB 0xDD` encodes a literal `0xDB`.
   """
 
   @end_byte 0xC0
@@ -10,6 +16,9 @@ defmodule Esp32.SLIP do
 
   @doc """
   Encodes a binary into a SLIP-framed packet.
+
+  Wraps the data with `0xC0` and escapes any occurrences of `0xC0` or `0xDB`
+  within the payload.
   """
   @spec encode(binary()) :: binary()
   def encode(data) do
@@ -28,10 +37,11 @@ defmodule Esp32.SLIP do
   @doc """
   Decodes a SLIP-framed packet.
 
+  Removes the `0xC0` framing and unescapes any encoded characters.
+
   Returns `{:ok, decoded_data}` if successful, or `{:error, reason}`.
-  Note: This implementation assumes a single complete packet is provided.
   """
-  @spec decode(binary()) :: {:ok, binary()} | {:error, atom()}
+  @spec decode(binary()) :: {:ok, binary()} | {:error, :invalid_escape}
   def decode(packet) do
     # Remove leading/trailing C0 if present
     trimmed = trim_frame(packet)

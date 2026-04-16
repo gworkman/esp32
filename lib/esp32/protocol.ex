@@ -1,6 +1,13 @@
 defmodule Esp32.Protocol do
   @moduledoc """
   Definitions and packet building for the ESP32 bootloader protocol.
+
+  The bootloader protocol uses a framed packet format:
+  - Direction (0x00 for Request, 0x01 for Response)
+  - Command ID (1 byte)
+  - Size (2 bytes, little-endian)
+  - Checksum (4 bytes, little-endian)
+  - Data (variable size)
   """
 
   import Bitwise
@@ -47,6 +54,13 @@ defmodule Esp32.Protocol do
 
   @doc """
   Builds a command packet.
+
+  A command packet consists of:
+  - `0x00` prefix (1 byte)
+  - `command_id` (1 byte)
+  - `size` of data (2 bytes, little-endian)
+  - `checksum` of data (4 bytes, little-endian)
+  - `data` (variable)
   """
   @spec build_command(atom() | integer(), integer(), binary()) :: binary()
   def build_command(command, checksum, data) do
@@ -85,8 +99,13 @@ defmodule Esp32.Protocol do
   @doc """
   Extracts status and error from the response data.
 
-  Options:
-  - `is_stub`: If true, assumes 2 status bytes (Stub loader). If false, 4 status bytes (ROM loader).
+  The status bytes are located at the end of the response data.
+  The length of the status bytes depends on whether the flasher stub or the
+  ROM loader is being used:
+  - ROM loader: 4 bytes (`<<status, error, 0, 0>>`)
+  - Stub loader: 2 bytes (`<<status, error>>`)
+
+  A `status` of 0 indicates success.
   """
   @spec parse_status(binary(), boolean()) :: {:ok, binary()} | {:error, {integer(), integer()}}
   def parse_status(data, is_stub \\ false) do

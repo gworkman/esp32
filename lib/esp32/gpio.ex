@@ -6,13 +6,18 @@ defmodule Esp32.GPIO do
   require Logger
 
   @doc """
-  Resets the ESP32 and enters bootloader mode.
+  Resets the ESP32 into bootloader mode using manual GPIO control.
+
+  This is typically used in Nerves devices where the ESP32 is connected directly
+  to the host CPU's GPIO pins.
 
   The procedure is:
-  1. Pull IO0 LOW (strapping pin for bootloader)
-  2. Toggle EN (reset) LOW then HIGH
-  3. Wait a brief moment for the device to start
-  4. Release IO0
+  1. Pull IO0 LOW (strapping pin to select bootloader mode)
+  2. Toggle EN (reset) LOW for 100ms, then HIGH
+  3. Wait 100ms for the chip to initialize the bootloader
+  4. Pull IO0 HIGH to release the strapping pin
+
+  `en_pin` and `io0_pin` are the GPIO pin names as recognized by `Circuits.GPIO`.
   """
   @spec enter_bootloader_mode(String.t(), String.t()) :: :ok | {:error, any()}
   def enter_bootloader_mode(en_pin, io0_pin) do
