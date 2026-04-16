@@ -49,27 +49,29 @@ defmodule Esp32 do
   end
 
   defp do_connect(uart, opts, use_stub, initial_baud, final_baud) do
-    reset? = Keyword.get(opts, :reset, true)
+    with :ok <- maybe_reset_into_bootloader(uart, opts),
+         :ok <- Bootloader.sync(uart),
+         :ok <- maybe_load_stub(uart, use_stub),
+         :ok <- maybe_change_baud(uart, initial_baud, final_baud) do
+      {:ok, uart}
+    end
+  end
 
-    with :ok <- if(reset?, do: reset_into_bootloader(uart, opts), else: :ok),
-         :ok <- Bootloader.sync(uart) do
-      if use_stub do
-        with {:ok, chip_family} <- Bootloader.detect_chip(uart, false),
-             :ok <- Bootloader.load_stub(uart, chip_family) do
-          # Switch baud rate if requested
-          if final_baud != initial_baud do
-            with :ok <- Bootloader.change_baud(uart, final_baud, initial_baud),
-                 :ok <- UART.configure(uart, speed: final_baud) do
-              UART.drain(uart)
-              {:ok, uart}
-            end
-          else
-            {:ok, uart}
-          end
-        end
-      else
-        {:ok, uart}
-      end
+  defp maybe_load_stub(_uart, false), do: :ok
+
+  defp maybe_load_stub(uart, true) do
+    with {:ok, chip_family} <- Bootloader.detect_chip(uart, false) do
+      Bootloader.load_stub(uart, chip_family)
+    end
+  end
+
+  defp maybe_change_baud(_uart, baud, baud), do: :ok
+
+  defp maybe_change_baud(uart, initial_baud, final_baud) do
+    with :ok <- Bootloader.change_baud(uart, final_baud, initial_baud),
+         :ok <- UART.configure(uart, speed: final_baud) do
+      UART.drain(uart)
+      :ok
     end
   end
 
@@ -110,19 +112,39 @@ defmodule Esp32 do
   defp is_known_bridge?(0x0403, _), do: true
   defp is_known_bridge?(_, _), do: false
 
-  defp reset_into_bootloader(uart, opts) do
-    if Keyword.get(opts, :auto_reset, false) do
-      # Use specialized USB reset if it looks like an Espressif built-in USB JTAG/Serial
-      case Circuits.UART.enumerate()
-           |> Enum.find(fn {_, info} -> Map.get(info, :vendor_id) == 0x303A end) do
-        {_port, _info} -> UART.usb_jtag_serial_reset(uart)
-        _ -> UART.auto_reset(uart)
-      end
-    else
-      reset_pin = Keyword.get(opts, :reset_pin)
-      boot_pin = Keyword.get(opts, :boot_pin)
-      GPIO.enter_bootloader_mode(reset_pin, boot_pin)
+  defp maybe_reset_into_bootloader(uart, opts) do
+    do_reset = Keyword.get(opts, :reset, true)
+    reset_strategy = reset_strategy(opts)
+
+    case {do_reset, reset_strategy} do
+      {false, _} ->
+        :ok
+
+      {true, :manual_reset} ->
+        reset_pin = Keyword.get(opts, :reset_pin)
+        boot_pin = Keyword.get(opts, :boot_pin)
+        GPIO.enter_bootloader_mode(reset_pin, boot_pin)
+
+      {true, :usb_jtag_auto_reset} ->
+        UART.usb_jtag_serial_reset(uart)
+
+      {true, :classic_auto_reset} ->
+        UART.auto_reset(uart)
     end
+  end
+
+  defp reset_strategy(opts) do
+    cond do
+      not Keyword.get(opts, :auto_reset, false) -> :manual_reset
+      built_in_usb_jtag?() -> :usb_jtag_auto_reset
+      true -> :classic_auto_reset
+    end
+  end
+
+  defp built_in_usb_jtag? do
+    Enum.any?(Circuits.UART.enumerate(), fn {_, info} ->
+      Map.get(info, :vendor_id) == 0x303A
+    end)
   end
 
   @doc """
@@ -196,7 +218,7 @@ defmodule Esp32 do
   end
 
   @doc """
-  Flashes a binary to the ESP32.
+  Flashes a binary to the ESP32 at the specified memory offset.
 
   Options:
   - `:is_stub` - Use stub protocol (default true)

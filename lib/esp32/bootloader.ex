@@ -78,13 +78,30 @@ defmodule Esp32.Bootloader do
   def detect_chip(uart, is_stub \\ true) do
     # For newer chips (ESP32-C3, S3, C6, etc.), GET_SECURITY_INFO is the preferred method
     case get_chip_id(uart, is_stub) do
-      {:ok, 0x00} -> {:ok, :esp32}
-      {:ok, 0x02} -> {:ok, :esp32s2}
-      {:ok, 0x05} -> {:ok, :esp32c3}
-      {:ok, 0x09} -> {:ok, :esp32s3}
-      {:ok, 0x0C} -> {:ok, :esp32c2} # 12
-      {:ok, 0x0D} -> {:ok, :esp32c6} # 13
-      {:ok, 0x10} -> {:ok, :esp32h2} # 16
+      {:ok, 0x00} ->
+        {:ok, :esp32}
+
+      {:ok, 0x02} ->
+        {:ok, :esp32s2}
+
+      {:ok, 0x05} ->
+        {:ok, :esp32c3}
+
+      {:ok, 0x09} ->
+        {:ok, :esp32s3}
+
+      # 12
+      {:ok, 0x0C} ->
+        {:ok, :esp32c2}
+
+      # 13
+      {:ok, 0x0D} ->
+        {:ok, :esp32c6}
+
+      # 16
+      {:ok, 0x10} ->
+        {:ok, :esp32h2}
+
       _ ->
         # Fallback to magic register for older chips (ESP8266, ESP32 ROM)
         case read_reg(uart, 0x40001000, is_stub) do
@@ -123,7 +140,9 @@ defmodule Esp32.Bootloader do
       # 20 bytes response format includes chip_id at offset 12
       # 16 bytes response format also has chip_id at offset 12
       if byte_size(status_data) >= 16 do
-        <<_flags::little-32, _crypt::8, _purposes::binary-size(7), chip_id::little-32, _rest::binary>> = status_data
+        <<_flags::little-32, _crypt::8, _purposes::binary-size(7), chip_id::little-32,
+          _rest::binary>> = status_data
+
         {:ok, chip_id}
       else
         {:error, {:invalid_security_info_size, byte_size(status_data)}}
