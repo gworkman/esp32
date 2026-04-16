@@ -29,7 +29,8 @@ defmodule Esp32.Protocol do
     FLASH_DEFL_DATA: 0x11,
     FLASH_DEFL_END: 0x12,
     SPI_FLASH_MD5: 0x13,
-    GET_SECURITY_INFO: 0x14
+    GET_SECURITY_INFO: 0x14,
+    ERASE_FLASH: 0xD0
   }
 
   @doc """

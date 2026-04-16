@@ -58,6 +58,15 @@ defmodule Esp32.Bootloader do
   end
 
   @doc """
+  Returns the bootloader flash offset for a given chip family.
+  """
+  @spec bootloader_offset(atom()) :: integer()
+  def bootloader_offset(:esp32), do: 0x1000
+  def bootloader_offset(:esp32s2), do: 0x1000
+  def bootloader_offset(:esp8266), do: 0x0
+  def bootloader_offset(_), do: 0x0
+
+  @doc """
   Detects the connected chip type by reading magic registers or security info.
 
   Uses the preferred `GET_SECURITY_INFO` command on newer chips and falls back
@@ -142,6 +151,26 @@ defmodule Esp32.Bootloader do
     with :ok <- UART.write(uart, encoded) do
       # Wait a tiny bit for the packet to leave the host buffer
       Process.sleep(50)
+      :ok
+    end
+  end
+
+  @doc """
+  Erases the entire flash chip.
+  This command is only supported by the flasher stub.
+
+  Timeout defaults to 120 seconds.
+  """
+  @spec erase_flash(pid(), pos_integer()) :: :ok | {:error, any()}
+  def erase_flash(uart, timeout \\ 120_000) do
+    cmd = Protocol.build_command(:ERASE_FLASH, 0, <<>>)
+    encoded = SLIP.encode(cmd)
+
+    with :ok <- UART.write(uart, encoded),
+         {:ok, response} <- UART.read_packet(uart, timeout),
+         {:ok, decoded} <- SLIP.decode(response),
+         {:ok, _cmd_id, _val, data} <- Protocol.parse_response(decoded),
+         {:ok, _} <- Protocol.parse_status(data, true) do
       :ok
     end
   end

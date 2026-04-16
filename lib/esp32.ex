@@ -115,6 +115,18 @@ defmodule Esp32 do
   end
 
   @doc """
+  Erases the entire SPI flash memory of the ESP device.
+
+  Note: This command is only supported when the flasher stub is loaded.
+  The operation can take up to 120 seconds depending on the flash chip.
+  """
+  @spec erase(pid(), keyword()) :: :ok | {:error, any()}
+  def erase(uart, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 120_000)
+    Bootloader.erase_flash(uart, timeout)
+  end
+
+  @doc """
   Synchronizes with the ESP32 bootloader.
   """
   @spec sync(pid()) :: :ok | {:error, any()}
@@ -144,16 +156,31 @@ defmodule Esp32 do
   This function reads the file from disk, performs a safety check to ensure
   it is a valid ESP32 image, and then flashes it.
 
+  If the `offset` matches the chip's bootloader offset, the header is patched
+  with the provided `:flash_mode`, `:flash_freq`, and `:flash_size` options.
+
   Options:
+  - `:flash_mode` - "qio", "qout", "dio", "dout" (default: "keep")
+  - `:flash_freq` - "40m", "26m", "20m", "80m" (default: "keep")
+  - `:flash_size` - "1MB", "2MB", "4MB", "8MB", "16MB" (default: "keep")
   - `:is_stub` - Use stub protocol (default true)
   - `:reboot` - Reboot after flash (default false)
   """
   @spec flash_file(pid(), String.t(), integer(), keyword()) :: :ok | {:error, any()}
+
   def flash_file(uart, path, offset, opts \\ []) do
     with {:ok, binary} <- File.read(path),
-         {:ok, _metadata, _footer} <- parse_image(binary) do
-      # Optional: could check if metadata.chip_id matches detected chip here
-      flash(uart, binary, offset, opts)
+         {:ok, _metadata, _footer} <- parse_image(binary),
+         {:ok, chip_family} <- detect_chip(uart) do
+      # If flashing to bootloader offset, patch the header
+      final_binary =
+        if offset == Bootloader.bootloader_offset(chip_family) do
+          Esp32.Image.patch_header(binary, chip_family, opts)
+        else
+          binary
+        end
+
+      flash(uart, final_binary, offset, opts)
     end
   end
 
