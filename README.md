@@ -6,12 +6,9 @@ reset and strapping pins to automate entry into bootloader mode.
 
 ## Features
 
-- **SLIP Encoding/Decoding**: Full support for Serial Line IP framing.
-- **Bootloader Protocol**: Implementation of the Espressif UART bootloader
-  protocol.
-- **Hardware Control**: Integrated management of EN (reset) and IO0 (strapping)
-  pins via `Circuits.GPIO`.
-- **Serial Communication**: Robust communication via `Circuits.UART`.
+- Supports all families of ESP32 chips
+- Two stage bootloader, including stub loading for flash programming
+- Automatic discovery and reset of USB-connected ESP32 devices
 
 ## Usage
 
@@ -34,17 +31,18 @@ IO.puts("Connected to: \#{chip}")
 
 When calling `Esp32.connect/2`, you can specify several options:
 
-* `:initial_baud_rate` - The baud rate used for the initial synchronization and
+- `:initial_baud_rate` - The baud rate used for the initial synchronization and
   loading the flasher stub (default: 115200).
-* `:baud_rate` - The target baud rate to use after the flasher stub is loaded.
+- `:baud_rate` - The target baud rate to use after the flasher stub is loaded.
   This is typically much higher (e.g., 921600) to speed up flashing.
-* `:auto_reset` - When set to `true`, the library will use the DTR and RTS lines
+- `:auto_reset` - When set to `true`, the library will use the DTR and RTS lines
   to automatically put the ESP32 into bootloader mode. This is common for most
   USB-based development boards.
-* `:reset` - When set to `false`, the library will skip the hardware reset
-  sequence and attempt to synchronize with an already running bootloader. (default: `true`).
-* `:reset_pin` and `:boot_pin` - GPIO pin names to use for manual reset and strapping
-  pin control (e.g., for custom Nerves hardware).
+- `:reset` - When set to `false`, the library will skip the hardware reset
+  sequence and attempt to synchronize with an already running bootloader.
+  (default: `true`).
+- `:reset_pin` and `:boot_pin` - GPIO pin names to use for manual reset and
+  strapping pin control (e.g., for custom Nerves hardware).
 
 ## Installation
 
@@ -54,8 +52,6 @@ Add `esp32` to your list of dependencies in `mix.exs`:
 def deps do
   [
     {:esp32, "~> 0.1.0"},
-    {:circuits_gpio, "~> 2.0"},
-    {:circuits_uart, "~> 1.0"}
   ]
 end
 ```
@@ -64,3 +60,9 @@ Documentation can be generated with
 [ExDoc](https://github.com/elixir-lang/ex_doc) and published on
 [HexDocs](https://hexdocs.pm). Once published, the docs can be found at
 <https://hexdocs.pm/esp32>.
+
+## License
+
+MIT License. The ESP32 stub firmware binaries found in `priv/stubs` are from the
+[`esptool`](https://github.com/espressif/esptool) project and are licensed
+separately (GPL-2.0). Please see the source repository for more details
