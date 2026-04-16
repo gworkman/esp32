@@ -17,12 +17,12 @@ defmodule Esp32.GPIO do
   3. Wait 100ms for the chip to initialize the bootloader
   4. Pull IO0 HIGH to release the strapping pin
 
-  `en_pin` and `io0_pin` are the GPIO pin names as recognized by `Circuits.GPIO`.
+  `reset_pin` and `boot_pin` are the GPIO pin names as recognized by `Circuits.GPIO`.
   """
   @spec enter_bootloader_mode(String.t(), String.t()) :: :ok | {:error, any()}
-  def enter_bootloader_mode(en_pin, io0_pin) do
-    with {:ok, en} <- Circuits.GPIO.open(en_pin, :output),
-         {:ok, io0} <- Circuits.GPIO.open(io0_pin, :output) do
+  def enter_bootloader_mode(reset_pin, boot_pin) do
+    with {:ok, en} <- Circuits.GPIO.open(reset_pin, :output),
+         {:ok, io0} <- Circuits.GPIO.open(boot_pin, :output) do
       try do
         # 1. IO0 LOW
         Circuits.GPIO.write(io0, 0)

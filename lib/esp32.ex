@@ -14,13 +14,16 @@ defmodule Esp32 do
   - `:baud_rate` - Final baud rate for communication (default 115200)
   - `:initial_baud_rate` - Initial sync baud rate used for loading the flasher stub (default 115200)
   - `:use_stub` - If true, load the flasher stub (default true)
+  - `:reset` - If true, perform the reset into bootloader sequence (default true)
   - `:auto_reset` - If true, use UART DTR/RTS signals for reset (default false)
-  - `:en_pin` - GPIO pin name for EN (reset) (required if not using :auto_reset)
-  - `:io0_pin` - GPIO pin name for IO0 (boot mode) (required if not using :auto_reset)
+  - `:reset_pin` - GPIO pin name for ESP32 reset pin
+  - `:boot_pin` - GPIO pin name for ESP32 boot pin 
 
   If `uart_port` is "auto", the library will attempt to find a connected ESP32.
   """
   @spec connect(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
+  def connect(uart_port, opts \\ [])
+
   def connect("auto", opts) do
     case find_port() do
       {:ok, port} -> connect(port, opts)
@@ -28,7 +31,6 @@ defmodule Esp32 do
     end
   end
 
-  @spec connect(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
   def connect(uart_port, opts) do
     initial_baud = Keyword.get(opts, :initial_baud_rate, 115_200)
     final_baud = Keyword.get(opts, :baud_rate, initial_baud)
@@ -36,7 +38,9 @@ defmodule Esp32 do
 
     with {:ok, uart} <- UART.open(uart_port, initial_baud) do
       case do_connect(uart, opts, use_stub, initial_baud, final_baud) do
-        {:ok, uart} -> {:ok, uart}
+        {:ok, uart} ->
+          {:ok, uart}
+
         error ->
           UART.close(uart)
           error
@@ -45,7 +49,9 @@ defmodule Esp32 do
   end
 
   defp do_connect(uart, opts, use_stub, initial_baud, final_baud) do
-    with :ok <- reset_into_bootloader(uart, opts),
+    reset? = Keyword.get(opts, :reset, true)
+
+    with :ok <- if(reset?, do: reset_into_bootloader(uart, opts), else: :ok),
          :ok <- Bootloader.sync(uart) do
       if use_stub do
         with {:ok, chip_family} <- Bootloader.detect_chip(uart, false),
@@ -92,25 +98,30 @@ defmodule Esp32 do
     end
   end
 
-  defp is_espressif?(0x303A, _), do: true # Espressif VID
+  # Espressif VID
+  defp is_espressif?(0x303A, _), do: true
   defp is_espressif?(_, _), do: false
 
-  defp is_known_bridge?(0x10C4, _), do: true # Silicon Labs CP210x VID
-  defp is_known_bridge?(0x1A86, _), do: true # QinHeng CH340 VID
-  defp is_known_bridge?(0x0403, _), do: true # FTDI VID
+  # Silicon Labs CP210x VID
+  defp is_known_bridge?(0x10C4, _), do: true
+  # QinHeng CH340 VID
+  defp is_known_bridge?(0x1A86, _), do: true
+  # FTDI VID
+  defp is_known_bridge?(0x0403, _), do: true
   defp is_known_bridge?(_, _), do: false
 
   defp reset_into_bootloader(uart, opts) do
     if Keyword.get(opts, :auto_reset, false) do
       # Use specialized USB reset if it looks like an Espressif built-in USB JTAG/Serial
-      case Circuits.UART.enumerate() |> Enum.find(fn {_, info} -> Map.get(info, :vendor_id) == 0x303A end) do
+      case Circuits.UART.enumerate()
+           |> Enum.find(fn {_, info} -> Map.get(info, :vendor_id) == 0x303A end) do
         {_port, _info} -> UART.usb_jtag_serial_reset(uart)
         _ -> UART.auto_reset(uart)
       end
     else
-      en_pin = Keyword.get(opts, :en_pin)
-      io0_pin = Keyword.get(opts, :io0_pin)
-      GPIO.enter_bootloader_mode(en_pin, io0_pin)
+      reset_pin = Keyword.get(opts, :reset_pin)
+      boot_pin = Keyword.get(opts, :boot_pin)
+      GPIO.enter_bootloader_mode(reset_pin, boot_pin)
     end
   end
 

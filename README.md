@@ -23,26 +23,28 @@ many development boards, you can use the automatic reset feature via DTR/RTS.
 {:ok, uart} = Esp32.connect("auto", auto_reset: true)
 
 # Option 2: Direct GPIO control (common for custom Nerves hardware)
-{:ok, uart} = Esp32.connect("/dev/ttyS0", en_pin: "en", io0_pin: "io0", baud_rate: 921600)
+{:ok, uart} = Esp32.connect("/dev/ttyS0", reset_pin: "en", boot_pin: "io0", baud_rate: 921600)
 
 # Detect the chip family
 {:ok, chip} = Esp32.detect_chip(uart)
-IO.puts("Connected to: #{chip}")
+IO.puts("Connected to: \#{chip}")
 ```
 
 ### Connection Options
 
 When calling `Esp32.connect/2`, you can specify several options:
 
-- `:initial_baud_rate` - The baud rate used for the initial synchronization and
+* `:initial_baud_rate` - The baud rate used for the initial synchronization and
   loading the flasher stub (default: 115200).
-- `:baud_rate` - The target baud rate to use after the flasher stub is loaded.
+* `:baud_rate` - The target baud rate to use after the flasher stub is loaded.
   This is typically much higher (e.g., 921600) to speed up flashing.
-- `:auto_reset` - When set to `true`, the library will use the DTR and RTS lines
-  to automatically put the ESP32 into bootloader mode. This is common for many
+* `:auto_reset` - When set to `true`, the library will use the DTR and RTS lines
+  to automatically put the ESP32 into bootloader mode. This is common for most
   USB-based development boards.
-- `:en_pin` and `:io0_pin` - GPIO pin names to use for manual reset and
-  strapping pin control (e.g., for custom Nerves hardware).
+* `:reset` - When set to `false`, the library will skip the hardware reset
+  sequence and attempt to synchronize with an already running bootloader. (default: `true`).
+* `:reset_pin` and `:boot_pin` - GPIO pin names to use for manual reset and strapping
+  pin control (e.g., for custom Nerves hardware).
 
 ## Installation
 

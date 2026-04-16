@@ -9,21 +9,21 @@ defmodule Esp32.HITLTest do
   mix test --include hitl
 
   You can configure the UART port and pins via environment variables:
-  ESP32_UART_PORT=/dev/ttyUSB0 ESP32_EN_PIN=en_pin_name ESP32_IO0_PIN=io0_pin_name mix test --include hitl
+  ESP32_UART_PORT=/dev/ttyUSB0 ESP32_RESET_PIN=reset_pin_name ESP32_BOOT_PIN=boot_pin_name mix test --include hitl
   """
 
   @tag :hitl
   test "connect, sync, and detect chip" do
     uart_port = System.get_env("ESP32_UART_PORT", "/dev/ttyUSB0")
-    en_pin = System.get_env("ESP32_EN_PIN", "en")
-    io0_pin = System.get_env("ESP32_IO0_PIN", "io0")
+    reset_pin = System.get_env("ESP32_RESET_PIN", "en")
+    boot_pin = System.get_env("ESP32_BOOT_PIN", "io0")
 
     # Use auto_reset if the environment says so
     opts =
-      if en_pin == "auto" do
+      if reset_pin == "auto" do
         [auto_reset: true]
       else
-        [en_pin: en_pin, io0_pin: io0_pin]
+        [reset_pin: reset_pin, boot_pin: boot_pin]
       end
 
     # Attempt connection
@@ -47,14 +47,14 @@ defmodule Esp32.HITLTest do
 
     if bin_path && File.exists?(bin_path) do
       uart_port = System.get_env("ESP32_UART_PORT", "/dev/ttyUSB0")
-      en_pin = System.get_env("ESP32_EN_PIN", "en")
-      io0_pin = System.get_env("ESP32_IO0_PIN", "io0")
+      reset_pin = System.get_env("ESP32_RESET_PIN", "en")
+      boot_pin = System.get_env("ESP32_BOOT_PIN", "io0")
 
       opts =
-        if en_pin == "auto" do
+        if reset_pin == "auto" do
           [auto_reset: true]
         else
-          [en_pin: en_pin, io0_pin: io0_pin]
+          [reset_pin: reset_pin, boot_pin: boot_pin]
         end
 
       {:ok, uart} = Esp32.connect(uart_port, opts ++ [use_stub: true])
