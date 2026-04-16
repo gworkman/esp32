@@ -9,8 +9,16 @@ defmodule Esp32.MixProject do
       start_permanent: Mix.env() == :prod,
       description: "Flash ESP32 microcontrollers with Elixir and Nerves",
       package: package(),
+      docs: docs(),
       deps: deps(),
       source_url: "https://github.com/gworkman/esp32"
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md"]
     ]
   end
 
