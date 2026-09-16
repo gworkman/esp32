@@ -1,135 +1,77 @@
 defmodule Esp32.Protocol do
   @moduledoc """
-  Definitions and packet building for the ESP32 bootloader protocol.
+  Packet building and parsing for the ESP serial bootloader protocol.
 
-  The bootloader protocol uses a framed packet format:
-  - Direction (0x00 for Request, 0x01 for Response)
-  - Command ID (1 byte)
-  - Size (2 bytes, little-endian)
-  - Checksum (4 bytes, little-endian)
-  - Data (variable size)
+  Request: `<<0x00, op, size::little-16, checksum::little-32, data::binary>>`.
+  Response: `<<0x01, op, size::little-16, value::little-32, data::binary>>`, where
+  `data` ends with two status bytes (ROM loaders append two more reserved bytes).
   """
 
   import Bitwise
 
   @commands %{
-    FLASH_BEGIN: 0x02,
-    FLASH_DATA: 0x03,
-    FLASH_END: 0x04,
-    MEM_BEGIN: 0x05,
-    MEM_END: 0x06,
-    MEM_DATA: 0x07,
-    SYNC: 0x08,
-    WRITE_REG: 0x09,
-    READ_REG: 0x0A,
-    SPI_SET_PARAMS: 0x0B,
-    SPI_ATTACH: 0x0D,
-    CHANGE_BAUDRATE: 0x0F,
-    FLASH_DEFL_BEGIN: 0x10,
-    FLASH_DEFL_DATA: 0x11,
-    FLASH_DEFL_END: 0x12,
-    SPI_FLASH_MD5: 0x13,
-    GET_SECURITY_INFO: 0x14,
-    ERASE_FLASH: 0xD0
+    flash_begin: 0x02,
+    flash_data: 0x03,
+    flash_end: 0x04,
+    mem_begin: 0x05,
+    mem_end: 0x06,
+    mem_data: 0x07,
+    sync: 0x08,
+    write_reg: 0x09,
+    read_reg: 0x0A,
+    spi_set_params: 0x0B,
+    spi_attach: 0x0D,
+    change_baudrate: 0x0F,
+    flash_defl_begin: 0x10,
+    flash_defl_data: 0x11,
+    flash_defl_end: 0x12,
+    spi_flash_md5: 0x13,
+    get_security_info: 0x14,
+    erase_flash: 0xD0,
+    erase_region: 0xD1,
+    read_flash: 0xD2,
+    run_user_code: 0xD3
   }
 
-  @doc """
-  Returns the command ID for a given command name.
-  """
-  @spec command_id(atom()) :: integer()
-  def command_id(name), do: @commands[name]
+  @names Map.new(@commands, fn {name, id} -> {id, name} end)
 
-  @doc """
-  Calculates the checksum for a given binary data.
-  """
-  @spec calculate_checksum(binary()) :: integer()
-  def calculate_checksum(data) do
-    do_checksum(data, 0xEF)
+  @type op :: atom()
+
+  @spec command_id(op()) :: byte()
+  def command_id(op), do: Map.fetch!(@commands, op)
+
+  @spec command_name(byte()) :: op() | nil
+  def command_name(id), do: Map.get(@names, id)
+
+  @doc "XOR checksum over `data`, seeded with 0xEF."
+  @spec checksum(binary()) :: byte()
+  def checksum(data), do: for(<<byte <- data>>, reduce: 0xEF, do: (acc -> bxor(acc, byte)))
+
+  @spec build_command(op(), non_neg_integer(), binary()) :: binary()
+  def build_command(op, checksum, data) do
+    <<0x00, command_id(op), byte_size(data)::little-16, checksum::little-32, data::binary>>
   end
 
-  defp do_checksum(<<byte, rest::binary>>, acc) do
-    do_checksum(rest, bxor(acc, byte))
+  @spec parse_response(term()) :: {:ok, byte(), non_neg_integer(), binary()} | :error
+  def parse_response(<<0x01, op, size::little-16, value::little-32, data::binary-size(size)>>) do
+    {:ok, op, value, data}
   end
 
-  defp do_checksum(<<>>, acc), do: acc &&& 0xFF
-
-  @doc """
-  Builds a command packet.
-
-  A command packet consists of:
-  - `0x00` prefix (1 byte)
-  - `command_id` (1 byte)
-  - `size` of data (2 bytes, little-endian)
-  - `checksum` of data (4 bytes, little-endian)
-  - `data` (variable)
-  """
-  @spec build_command(atom() | integer(), integer(), binary()) :: binary()
-  def build_command(command, checksum, data) do
-    cmd_id = if is_atom(command), do: command_id(command), else: command
-    size = byte_size(data)
-
-    <<
-      0x00,
-      cmd_id,
-      size::little-16,
-      checksum::little-32,
-      data::binary
-    >>
-  end
+  def parse_response(_), do: :error
 
   @doc """
-  Parses a response packet.
+  Checks the two status bytes that follow `resp_data_len` bytes of response data.
 
-  Returns `{:ok, command_id, value, data}` or `{:error, reason}`.
+  Returns the response data on success or the error byte on failure.
   """
-  @spec parse_response(binary()) :: {:ok, integer(), integer(), binary()} | {:error, atom()}
-  def parse_response(
-        <<0x01, command_id, size::little-16, value::little-32, data::binary-size(size)>>
-      ) do
-    {:ok, command_id, value, data}
-  end
-
-  def parse_response(<<0x01, _::binary>>) do
-    {:error, :incomplete_packet}
-  end
-
-  def parse_response(_) do
-    {:error, :invalid_packet_format}
-  end
-
-  @doc """
-  Extracts status and error from the response data.
-
-  The status bytes are located at the end of the response data.
-  The length of the status bytes depends on whether the flasher stub or the
-  ROM loader is being used:
-  - ROM loader: 4 bytes (`<<status, error, 0, 0>>`)
-  - Stub loader: 2 bytes (`<<status, error>>`)
-
-  A `status` of 0 indicates success.
-  """
-  @spec parse_status(binary(), boolean()) :: {:ok, binary()} | {:error, {integer(), integer()}}
-  def parse_status(data, is_stub \\ false) do
-    size = byte_size(data)
-    status_len = if is_stub, do: 2, else: 4
-
-    if size >= status_len do
-      payload_size = size - status_len
-      <<payload::binary-size(payload_size), status_bytes::binary>> = data
-
-      {status, error} =
-        case status_bytes do
-          <<status, error, _reserved::16>> -> {status, error}
-          <<status, error>> -> {status, error}
-        end
-
-      if status == 0 do
-        {:ok, payload}
-      else
-        {:error, {status, error}}
-      end
-    else
-      {:error, :insufficient_data}
+  @spec check_status(binary(), non_neg_integer()) ::
+          {:ok, binary()} | {:error, {:status, byte()} | :short_response}
+  def check_status(data, resp_data_len) do
+    case data do
+      <<resp::binary-size(^resp_data_len), 0, _error, _::binary>> -> {:ok, resp}
+      <<_::binary-size(^resp_data_len), _status, error, _::binary>> -> {:error, {:status, error}}
+      <<status, error, _::binary>> when status != 0 -> {:error, {:status, error}}
+      _ -> {:error, :short_response}
     end
   end
 end

@@ -8,23 +8,6 @@ defmodule Esp32.FakeUART do
 
   use GenServer
 
-  @ops %{
-    flash_begin: 0x02,
-    flash_data: 0x03,
-    flash_end: 0x04,
-    mem_begin: 0x05,
-    mem_end: 0x06,
-    mem_data: 0x07,
-    sync: 0x08,
-    write_reg: 0x09,
-    read_reg: 0x0A,
-    spi_attach: 0x0D,
-    change_baudrate: 0x0F,
-    spi_flash_md5: 0x13,
-    get_security_info: 0x14,
-    erase_flash: 0xD0
-  }
-
   def start_link(handler \\ fn _ -> [] end), do: GenServer.start_link(__MODULE__, handler)
 
   @doc "Queues frames to be returned by the next reads."
@@ -38,7 +21,8 @@ defmodule Esp32.FakeUART do
 
   @doc "Builds a bootloader response packet for `op`."
   def response(op, data, value \\ 0) do
-    <<0x01, Map.fetch!(@ops, op), byte_size(data)::little-16, value::little-32, data::binary>>
+    <<0x01, Esp32.Protocol.command_id(op), byte_size(data)::little-16, value::little-32,
+      data::binary>>
   end
 
   @impl true

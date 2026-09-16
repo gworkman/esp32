@@ -1,34 +1,52 @@
 defmodule Esp32.ProtocolTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias Esp32.Protocol
 
-  test "calculate_checksum/1 returns XOR-based checksum with seed 0xEF" do
-    # 0xEF ^ 0x01 ^ 0x02 = 0xEF ^ 0x03 = 0xEC
-    assert Protocol.calculate_checksum(<<0x01, 0x02>>) == 0xEC
+  test "checksum/1 XORs bytes with seed 0xEF" do
+    assert Protocol.checksum(<<>>) == 0xEF
+    assert Protocol.checksum(<<0x01, 0x02>>) == 0xEC
   end
 
-  test "build_command/3 creates correct binary structure" do
-    # Command SYNC (0x08), checksum 0x00, data <<0x01>>
-    # Header: 0x00 (req), 0x08 (cmd), 0x01 0x00 (size 1), 0x00 0x00 0x00 0x00 (checksum)
-    cmd = Protocol.build_command(:SYNC, 0, <<0x01>>)
-    assert cmd == <<0x00, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01>>
+  test "command_id/1 and command_name/1" do
+    assert Protocol.command_id(:sync) == 0x08
+    assert Protocol.command_name(0x0A) == :read_reg
+    assert Protocol.command_name(0xFF) == nil
   end
 
-  test "parse_response/1 parses correct response" do
-    # Response SYNC (0x08), size 4, value 0x00, data <<0x01, 0x02, 0x03, 0x04>>
-    resp = <<0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04>>
-    assert Protocol.parse_response(resp) == {:ok, 0x08, 0, <<0x01, 0x02, 0x03, 0x04>>}
+  test "build_command/3 builds a request packet" do
+    assert Protocol.build_command(:sync, 0, <<0x01>>) == <<0x00, 0x08, 1, 0, 0, 0, 0, 0, 0x01>>
   end
 
-  test "parse_status/1 extracts status and error" do
-    # Data with 4 status bytes: status 0 (success), error 0
-    data = <<0x01, 0x02, 0x00, 0x00, 0x00, 0x00>>
-    assert Protocol.parse_status(data) == {:ok, <<0x01, 0x02>>}
+  test "parse_response/1" do
+    assert Protocol.parse_response(<<0x01, 0x08, 4::little-16, 7::little-32, 1, 2, 3, 4>>) ==
+             {:ok, 0x08, 7, <<1, 2, 3, 4>>}
+
+    assert Protocol.parse_response(<<0x00, 0x08, 0::little-16, 0::little-32>>) == :error
+    assert Protocol.parse_response(<<0x01, 0x08, 9::little-16, 0::little-32, 1>>) == :error
+    assert Protocol.parse_response({:error, :invalid_escape}) == :error
   end
 
-  test "parse_status/1 returns error on status 1" do
-    # Data with 4 status bytes: status 1 (failure), error 7 (checksum error)
-    data = <<0x01, 0x02, 0x01, 0x07, 0x00, 0x00>>
-    assert Protocol.parse_status(data) == {:error, {1, 7}}
+  describe "check_status/2" do
+    test "stub responses carry two status bytes" do
+      assert Protocol.check_status(<<0, 0>>, 0) == {:ok, <<>>}
+      assert Protocol.check_status(<<1, 7>>, 0) == {:error, {:status, 7}}
+    end
+
+    test "ROM responses carry two extra reserved bytes that are ignored" do
+      assert Protocol.check_status(<<0, 0, 0, 0>>, 0) == {:ok, <<>>}
+      assert Protocol.check_status(<<1, 5, 0, 0>>, 0) == {:error, {:status, 5}}
+    end
+
+    test "status follows resp_data_len bytes of data" do
+      assert Protocol.check_status(<<1, 2, 0, 0>>, 2) == {:ok, <<1, 2>>}
+      assert Protocol.check_status(<<1, 2, 0, 0, 0, 0>>, 2) == {:ok, <<1, 2>>}
+      assert Protocol.check_status(<<1, 2, 1, 9>>, 2) == {:error, {:status, 9}}
+    end
+
+    test "short responses report their leading status or :short_response" do
+      assert Protocol.check_status(<<1, 5, 0, 0>>, 20) == {:error, {:status, 5}}
+      assert Protocol.check_status(<<0, 0>>, 20) == {:error, :short_response}
+      assert Protocol.check_status(<<>>, 0) == {:error, :short_response}
+    end
   end
 end
