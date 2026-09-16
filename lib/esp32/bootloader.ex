@@ -13,9 +13,9 @@ defmodule Esp32.Bootloader do
 
   Options: `:checksum` (0), `:timeout` (3000 ms), `:resp_data_len` (0).
 
-  Errors: `{op, error_byte}` for a failed status, `{op, :short_response}`,
-  `:timeout` when no frame arrives, `:no_response` when 100 frames arrive
-  without a matching response.
+  Error reasons, returned as `{:error, reason}`: `{op, error_byte}` for a
+  failed status, `{op, :short_response}`, `:timeout` when no frame arrives,
+  `:no_response` when 100 frames arrive without a matching response.
   """
   @spec command(Device.t(), Protocol.op(), binary(), keyword()) ::
           {:ok, non_neg_integer(), binary()} | {:error, term()}
