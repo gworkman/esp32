@@ -56,6 +56,11 @@ defmodule Esp32.BootloaderTest do
       assert {:ok, _, _} = Bootloader.command(device, :flash_data, <<9>>, checksum: 0xE6)
       assert [{0x03, <<9>>}] = FakeUART.writes(device.uart)
     end
+
+    test "gives up after 100 unmatched frames" do
+      device = device(fn _ -> List.duplicate(response(:sync, <<0, 0>>), 101) end)
+      assert {:error, :no_response} = Bootloader.command(device, :read_reg, <<0::little-32>>)
+    end
   end
 
   test "read_reg/2 and write_reg/3" do
