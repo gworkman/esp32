@@ -104,6 +104,13 @@ defmodule Esp32.BootloaderTest do
       device = device(fn {0x08, _} -> List.duplicate(response(:sync, <<0, 0>>, 0), 3) end)
       assert {:error, :timeout} = Bootloader.sync(device)
     end
+
+    test "ignores status bytes in the replies" do
+      device =
+        device(fn {0x08, _} -> List.duplicate(response(:sync, <<1, 5, 0, 0>>, 0x80), 8) end)
+
+      assert {:ok, false} = Bootloader.sync(device)
+    end
   end
 
   # 20-byte security info block (flags, crypt count, 7 key purposes, chip id, api version)

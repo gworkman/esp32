@@ -98,14 +98,14 @@ defmodule Esp32.Bootloader do
   end
 
   @doc """
-  Synchronizes with the loader. Returns whether the flasher stub is already running,
-  which the ROM reveals by answering with a non-zero value.
+  Synchronizes with the loader and returns whether the flasher stub is already running:
+  the ROM answers with non-zero values, the stub with zero.
   """
   @spec sync(Device.t()) :: {:ok, boolean()} | {:error, term()}
   def sync(device) do
     payload = <<0x07, 0x07, 0x12, 0x20>> <> :binary.copy(<<0x55>>, 32)
 
-    with {:ok, first, _} <- command(device, :sync, payload, timeout: @sync_timeout),
+    with {:ok, first, _} <- raw_command(device, :sync, payload, timeout: @sync_timeout),
          {:ok, rest} <- read_sync_replies(device, 7, []) do
       {:ok, Enum.all?([first | rest], &(&1 == 0))}
     end
