@@ -47,6 +47,7 @@ defmodule Esp32.ChipTest do
   test "usb_otg_check/1" do
     assert Chip.usb_otg_check(:esp32s2) == {0x3FFFFD14, 2}
     assert Chip.usb_otg_check(:esp32s3) == {0x3FCEF14C, 3}
+    assert Chip.usb_otg_check(:esp32e22) == {0x3111B700, 3}
     assert Chip.usb_otg_check(:esp32c3) == nil
   end
 

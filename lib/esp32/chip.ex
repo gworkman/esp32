@@ -103,7 +103,7 @@ defmodule Esp32.Chip do
                freq: %{"48m" => 0x0, "24m" => 0x0, "16m" => 0x1, "12m" => 0x2}
              },
              esp32p4: %{id: 18, bootloader_offset: 0x2000, stub: "esp32p4"},
-             esp32e22: %{id: 31},
+             esp32e22: %{id: 31, usb_otg: {0x3111B700, 3}},
              esp32s31: %{id: 32, bootloader_offset: 0x2000, freq: @c5_freq}
            ],
            fn {name, overrides} -> {name, Map.merge(@defaults, overrides)} end
