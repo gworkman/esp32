@@ -6,6 +6,7 @@ defmodule Esp32.MixProject do
       app: :esp32,
       version: "0.1.0",
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       description: "Flash ESP32 microcontrollers with Elixir and Nerves",
       package: package(),
@@ -14,6 +15,9 @@ defmodule Esp32.MixProject do
       source_url: "https://github.com/gworkman/esp32"
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp docs do
     [
