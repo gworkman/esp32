@@ -75,6 +75,8 @@ defmodule Esp32.Image do
     end
   end
 
+  def parse(<<@magic, _::binary>>), do: {:error, :truncated}
+
   def parse(_binary), do: {:error, :invalid_magic}
 
   defp parse_segments(rest, 0, acc), do: {:ok, Enum.reverse(acc), rest}

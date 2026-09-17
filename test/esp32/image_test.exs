@@ -48,6 +48,7 @@ defmodule Esp32.ImageTest do
 
     test "rejects non-images and truncated images" do
       assert {:error, :invalid_magic} = Image.parse(<<0xAA, 0x50, 1, 2>>)
+      assert {:error, :truncated} = Image.parse(binary_part(build(), 0, 10))
       assert {:error, :invalid_segments} = Image.parse(binary_part(build(), 0, 30))
       assert {:error, :truncated} = Image.parse(binary_part(build(), 0, 40))
     end
