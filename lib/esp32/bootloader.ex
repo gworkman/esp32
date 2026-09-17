@@ -321,9 +321,9 @@ defmodule Esp32.Bootloader do
 
   defp change_baud_params(_device, baud), do: {:ok, <<baud::little-32, 0::little-32>>}
 
-  @doc "Flash write block size: 0x4000 for the stub, 0x400 for the ROM, 0x800 over USB-OTG."
+  @doc "Flash write block size: 0x4000 for the stub (0x800 over USB-OTG), 0x400 for the ROM."
   @spec flash_block_size(Device.t()) :: pos_integer()
-  def flash_block_size(%{usb_otg?: true}), do: 0x800
+  def flash_block_size(%{stub?: true, usb_otg?: true}), do: 0x800
   def flash_block_size(%{stub?: true}), do: 0x4000
   def flash_block_size(_device), do: 0x400
 

@@ -319,6 +319,7 @@ defmodule Esp32.BootloaderTest do
     assert Bootloader.flash_block_size(%Device{stub?: true}) == 0x4000
     assert Bootloader.flash_block_size(%Device{stub?: false}) == 0x400
     assert Bootloader.flash_block_size(%Device{stub?: true, usb_otg?: true}) == 0x800
+    assert Bootloader.flash_block_size(%Device{stub?: false, usb_otg?: true}) == 0x400
   end
 
   test "spi_attach/1 sends the ROM's 8-byte argument" do
