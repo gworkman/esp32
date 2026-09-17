@@ -23,6 +23,7 @@ esp.chip #=> :esp32c3
 :ok = Esp32.flash_file(esp, "firmware.bin", 0x10000, reboot: true)
 
 # Or flash a binary you already have in memory
+binary = File.read!("firmware.bin")
 :ok = Esp32.flash(esp, binary, 0x10000)
 
 # Erase the entire flash chip
@@ -73,7 +74,7 @@ offsets vary depending on the chip family:
 | **ESP32-C3** | `0x0`      | `0x8000`        | `0x10000`   |
 | **ESP32-C6** | `0x0`      | `0x8000`        | `0x10000`   |
 
-_Note: `flash_file/4` patches the header when the offset matches the chip's bootloader offset (`0x1000` on ESP32/S2, `0x2000` on C5/P4, `0x0` elsewhere)._
+_Note: `flash_file/4` patches the header when the offset matches the chip's bootloader offset (`0x1000` on ESP32/S2, `0x2000` on C5/P4/H4/S31, `0x0` elsewhere)._
 
 ## Installation
 
