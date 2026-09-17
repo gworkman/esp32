@@ -62,9 +62,10 @@ defmodule Esp32.UART do
   def set_rts(pid, value), do: Circuits.UART.set_rts(pid, value)
 
   @doc "USB vendor and product id of `port`, if it is a USB device."
-  @spec usb_ids(String.t()) :: {non_neg_integer(), non_neg_integer()} | nil
-  def usb_ids(port) do
-    case Circuits.UART.enumerate()[Path.basename(port)] do
+  @spec usb_ids(String.t(), map()) :: {non_neg_integer(), non_neg_integer()} | nil
+  def usb_ids(port, ports \\ Circuits.UART.enumerate()) do
+    # Ports are listed by full path on macOS and by bare name on Linux
+    case ports[port] || ports[Path.basename(port)] do
       %{vendor_id: vid, product_id: pid} -> {vid, pid}
       _ -> nil
     end
