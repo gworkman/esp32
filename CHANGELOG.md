@@ -18,6 +18,9 @@ and this project adheres to
   reject unknown flash parameters, refuse images built for another chip, and verify
   the written data by MD5.
 - `Esp32.Image.parse/1` returns `{:ok, %Esp32.Image{}}`.
+- `reboot: true` now hard-resets the chip (DTR/RTS or the EN pin) instead of
+  sending `FLASH_END`, which only re-entered the bootloader; `Esp32.reset/1`
+  exposes the same reset.
 
 ### Removed
 

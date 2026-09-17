@@ -53,4 +53,25 @@ defmodule Esp32.ResetTest do
       assert Enum.take(FakeUART.calls(uart), -2) == [{:set_dtr, false}, {:set_rts, false}]
     end
   end
+
+  describe "hard/4" do
+    test ":none has no reset strategy" do
+      {:ok, uart} = FakeUART.start_link()
+      assert {:error, :no_reset_strategy} = Reset.hard(:none, uart, [], false)
+    end
+
+    test ":classic pulses RTS" do
+      {:ok, uart} = FakeUART.start_link()
+      assert :ok = Reset.hard(:classic, uart, [], false)
+      assert FakeUART.calls(uart) == [{:set_rts, true}, {:set_rts, false}]
+    end
+
+    test ":usb_jtag_serial pulses RTS with a longer delay" do
+      {:ok, uart} = FakeUART.start_link()
+      {elapsed, _} = :timer.tc(fn -> Reset.hard(:usb_jtag_serial, uart, [], true) end)
+
+      assert FakeUART.calls(uart) == [{:set_rts, true}, {:set_rts, false}]
+      assert elapsed >= 350_000
+    end
+  end
 end

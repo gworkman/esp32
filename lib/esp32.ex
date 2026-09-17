@@ -30,6 +30,8 @@ defmodule Esp32 do
   - `:reset_pin`, `:boot_pin` - `Circuits.GPIO` pins wired to EN and IO0; without
     them DTR/RTS are used
   - `:connect_attempts` - reset and sync attempts (default 7)
+
+  The chosen reset strategy is kept on the device for `reset/1`.
   """
   @spec connect(String.t() | :auto, keyword()) :: {:ok, Device.t()} | {:error, term()}
   def connect(port, opts \\ [])
@@ -42,9 +44,16 @@ defmodule Esp32 do
     initial_baud = Keyword.get(opts, :initial_baud_rate, @default_baud)
 
     with {:ok, uart} <- UART.open(port, initial_baud) do
-      device = %Device{uart: uart, port: port, baud: initial_baud}
+      device = %Device{
+        uart: uart,
+        port: port,
+        baud: initial_baud,
+        reset: Reset.strategy(opts, UART.usb_ids(port)),
+        reset_pin: opts[:reset_pin],
+        boot_pin: opts[:boot_pin]
+      }
 
-      case establish(device, Reset.strategy(opts, UART.usb_ids(port)), opts) do
+      case establish(device, opts) do
         {:ok, device} ->
           {:ok, device}
 
@@ -57,10 +66,10 @@ defmodule Esp32 do
 
   @doc false
   # Everything connect/2 does after the port is open
-  def establish(device, strategy, opts) do
+  def establish(device, opts) do
     attempts = Keyword.get(opts, :connect_attempts, @connect_attempts)
 
-    with {:ok, stub_running?} <- enter_bootloader(device, strategy, opts, 0, attempts),
+    with {:ok, stub_running?} <- enter_bootloader(device, opts, 0, attempts),
          {:ok, chip} <- Bootloader.detect_chip(device),
          device = %{device | chip: chip, stub?: stub_running?},
          {:ok, device} <- detect_usb_otg(device),
@@ -69,19 +78,20 @@ defmodule Esp32 do
     end
   end
 
-  defp enter_bootloader(device, strategy, opts, attempt, attempts) when attempt < attempts do
+  defp enter_bootloader(device, opts, attempt, attempts) when attempt < attempts do
     UART.flush(device.uart)
 
-    with :ok <- Reset.run(strategy, device.uart, opts, attempt) do
+    with :ok <- Reset.run(device.reset, device.uart, pin_opts(device), attempt) do
       case try_sync(device, @sync_attempts) do
         {:ok, stub_running?} -> {:ok, stub_running?}
-        {:error, _} -> enter_bootloader(device, strategy, opts, attempt + 1, attempts)
+        {:error, _} -> enter_bootloader(device, opts, attempt + 1, attempts)
       end
     end
   end
 
-  defp enter_bootloader(_device, _strategy, _opts, _attempt, _attempts),
-    do: {:error, :sync_failed}
+  defp enter_bootloader(_device, _opts, _attempt, _attempts), do: {:error, :sync_failed}
+
+  defp pin_opts(device), do: [reset_pin: device.reset_pin, boot_pin: device.boot_pin]
 
   defp try_sync(_device, 0), do: {:error, :sync_failed}
 
@@ -122,6 +132,12 @@ defmodule Esp32 do
   @spec close(Device.t()) :: :ok
   def close(%Device{uart: uart}), do: UART.close(uart)
 
+  @doc "Hard-resets the chip so it boots normally. Reconnect before sending further commands."
+  @spec reset(Device.t()) :: :ok | {:error, term()}
+  def reset(%Device{} = device) do
+    Reset.hard(device.reset, device.uart, pin_opts(device), device.usb_otg?)
+  end
+
   @doc "Finds the first serial port backed by an Espressif chip or a common USB-serial bridge."
   @spec find_port() :: {:ok, String.t()} | {:error, :no_port_found}
   def find_port do
@@ -142,7 +158,8 @@ defmodule Esp32 do
   - `:flash_mode`, `:flash_freq`, `:flash_size` - rewrite the header of a bootloader
     image, see `Esp32.Image.patch_header/3` (default `:keep`)
   - `:verify` - compare the flash MD5 afterwards (default true)
-  - `:reboot` - reset the chip when done (default false)
+  - `:reboot` - hard-reset the chip into the application when done, see `reset/1`
+    (default false)
 
   Images built for a different chip are refused; other data is written as is.
   """
@@ -209,9 +226,15 @@ defmodule Esp32 do
     end
   end
 
-  # FLASH_END makes the ROM loader exit, so the ROM only gets it when rebooting
-  defp finish(%{stub?: false}, false), do: :ok
-  defp finish(device, reboot?), do: Bootloader.flash_end(device, reboot?)
+  # FLASH_END makes the ROM loader exit, so only the stub is told to leave flash mode
+  defp finish(device, reboot?) do
+    with :ok <- leave_flash_mode(device) do
+      if reboot?, do: reset(device), else: :ok
+    end
+  end
+
+  defp leave_flash_mode(%{stub?: true} = device), do: Bootloader.flash_end(device, false)
+  defp leave_flash_mode(_device), do: :ok
 
   @doc "Erases the whole flash chip. Requires the flasher stub; may take up to two minutes."
   @spec erase(Device.t()) :: :ok | {:error, term()}

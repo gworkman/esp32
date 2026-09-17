@@ -28,10 +28,10 @@ defmodule Esp32Test do
 
   defp ops(device), do: device.uart |> FakeUART.writes() |> Enum.map(&elem(&1, 0))
 
-  describe "establish/3" do
+  describe "establish/2" do
     test "syncs, detects the chip, loads the stub and changes baud" do
       device = device(rom_c3_handler())
-      assert {:ok, esp} = Esp32.establish(device, :none, baud_rate: 921_600)
+      assert {:ok, esp} = Esp32.establish(device, baud_rate: 921_600)
       assert %Device{chip: :esp32c3, stub?: true, baud: 921_600} = esp
       assert {:configure, [speed: 921_600]} in FakeUART.calls(device.uart)
       assert [0x08, 0x14, 0x05 | _] = ops(device)
@@ -45,12 +45,12 @@ defmodule Esp32Test do
       end
 
       assert {:ok, %Device{chip: :esp32c6, stub?: true, baud: 115_200}} =
-               Esp32.establish(device(handler), :none, [])
+               Esp32.establish(device(handler), [])
     end
 
     test "use_stub: false stays on the ROM loader" do
       device = device(rom_c3_handler())
-      assert {:ok, %Device{stub?: false}} = Esp32.establish(device, :none, use_stub: false)
+      assert {:ok, %Device{stub?: false}} = Esp32.establish(device, use_stub: false)
       refute 0x05 in ops(device)
     end
 
@@ -62,12 +62,12 @@ defmodule Esp32Test do
       end
 
       assert {:ok, %Device{chip: :esp32s3, usb_otg?: true}} =
-               Esp32.establish(device(handler), :none, use_stub: false)
+               Esp32.establish(device(handler), use_stub: false)
     end
 
     test "retries sync across connect attempts and reports failure" do
-      device = device(fn _ -> [] end)
-      assert {:error, :sync_failed} = Esp32.establish(device, :classic, connect_attempts: 2)
+      device = device(fn _ -> [] end, reset: :classic)
+      assert {:error, :sync_failed} = Esp32.establish(device, connect_attempts: 2)
       assert Enum.count(ops(device), &(&1 == 0x08)) == 10
       assert Enum.count(FakeUART.calls(device.uart), &(&1 == {:set_rts, true})) == 2
     end
@@ -78,7 +78,7 @@ defmodule Esp32Test do
         {0x14, _} -> [response(:get_security_info, security_info(99) <> @ok_rom)]
       end
 
-      assert {:error, {:unknown_chip_id, 99}} = Esp32.establish(device(handler), :none, [])
+      assert {:error, {:unknown_chip_id, 99}} = Esp32.establish(device(handler), [])
     end
   end
 
@@ -133,9 +133,17 @@ defmodule Esp32Test do
     end
 
     test "reboot: true", %{written: written} do
-      device = device(flash_handler(written), chip: :esp32c3, stub?: true)
+      device = device(flash_handler(written), chip: :esp32c3, stub?: true, reset: :classic)
       assert :ok = Esp32.flash(device, image(), 0x10000, reboot: true)
-      assert {0x04, <<0::little-32>>} = List.last(FakeUART.writes(device.uart))
+      assert {0x04, <<1::little-32>>} = List.last(FakeUART.writes(device.uart))
+      assert {:set_rts, true} in FakeUART.calls(device.uart)
+    end
+
+    test "reboot: true without a reset strategy", %{written: written} do
+      device = device(flash_handler(written), chip: :esp32c3, stub?: true)
+
+      assert {:error, :no_reset_strategy} =
+               Esp32.flash(device, image(), 0x10000, reboot: true, verify: false)
     end
 
     test "verify: false skips the MD5 check", %{written: written} do
@@ -154,16 +162,15 @@ defmodule Esp32Test do
                Esp32.flash(device(handler, chip: :esp32c3, stub?: true), image(), 0x10000)
     end
 
-    test "ROM loader: attaches SPI first and skips FLASH_END unless rebooting", %{
-      written: written
-    } do
+    test "ROM loader: attaches SPI first and never sends FLASH_END", %{written: written} do
       device = device(flash_handler(written), chip: :esp32c3, stub?: false)
       assert :ok = Esp32.flash(device, image(), 0x10000, verify: false)
       assert ops(device) == [0x0D, 0x02, 0x03]
 
-      device = device(flash_handler(written), chip: :esp32c3, stub?: false)
+      device = device(flash_handler(written), chip: :esp32c3, stub?: false, reset: :classic)
       assert :ok = Esp32.flash(device, image(), 0x10000, verify: false, reboot: true)
-      assert ops(device) == [0x0D, 0x02, 0x03, 0x04]
+      assert ops(device) == [0x0D, 0x02, 0x03]
+      assert {:set_rts, true} in FakeUART.calls(device.uart)
     end
 
     test "refuses an image built for another chip", %{written: written} do
@@ -220,6 +227,7 @@ defmodule Esp32Test do
     assert :ok = Esp32.erase(device)
     assert {:ok, 5} = Esp32.read_reg(device, 0x10)
     assert :ok = Esp32.write_reg(device, 0x10, 5)
+    assert :ok = Esp32.reset(%{device | reset: :usb_jtag_serial})
     assert :ok = Esp32.close(device)
     refute Process.alive?(device.uart)
   end

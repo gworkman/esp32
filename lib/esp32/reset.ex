@@ -91,5 +91,32 @@ defmodule Esp32.Reset do
     end
   end
 
+  @doc "Resets the chip so it boots normally; USB-OTG ports need a longer pulse."
+  @spec hard(strategy(), pid(), keyword(), boolean()) :: :ok | {:error, term()}
+  def hard(:none, _uart, _opts, _usb_otg?), do: {:error, :no_reset_strategy}
+
+  def hard(:gpio, _uart, opts, _usb_otg?) do
+    with {:ok, en} <- Circuits.GPIO.open(opts[:reset_pin], :output) do
+      try do
+        Circuits.GPIO.write(en, 0)
+        Process.sleep(100)
+        Circuits.GPIO.write(en, 1)
+        :ok
+      after
+        Circuits.GPIO.close(en)
+      end
+    end
+  end
+
+  def hard(_dtr_rts, uart, _opts, usb_otg?) do
+    delay = if usb_otg?, do: 200, else: 100
+
+    with :ok <- UART.set_rts(uart, true),
+         :ok <- sleep(delay),
+         :ok <- UART.set_rts(uart, false) do
+      if usb_otg?, do: sleep(200), else: :ok
+    end
+  end
+
   defp sleep(ms), do: Process.sleep(ms)
 end
