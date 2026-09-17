@@ -1,272 +1,228 @@
 defmodule Esp32 do
   @moduledoc """
-  ESP32 Serial Bootloader management library for Elixir and Nerves.
+  Serial bootloader client for ESP32-family chips, for Elixir and Nerves.
+
+      {:ok, esp} = Esp32.connect("/dev/ttyUSB0", baud_rate: 921_600)
+      :ok = Esp32.flash_file(esp, "firmware.bin", 0x10000)
+      :ok = Esp32.close(esp)
   """
 
-  alias Esp32.GPIO
-  alias Esp32.UART
-  alias Esp32.Bootloader
+  import Bitwise
+
+  alias Esp32.{Bootloader, Chip, Device, Image, Reset, UART}
+
+  @default_baud 115_200
+  @connect_attempts 7
+  @sync_attempts 5
+  # Espressif, Silicon Labs CP210x, QinHeng CH340, FTDI
+  @bridge_vids [0x303A, 0x10C4, 0x1A86, 0x0403]
 
   @doc """
-  Connects to an ESP32 device, puts it in bootloader mode, and synchronizes.
+  Opens `port`, resets the chip into its bootloader, and prepares it for flashing.
+
+  `port` is a serial device name, or `:auto` to use `find_port/0`.
 
   Options:
-  - `:baud_rate` - Final baud rate for communication (default 115200)
-  - `:initial_baud_rate` - Initial sync baud rate used for loading the flasher stub (default 115200)
-  - `:use_stub` - If true, load the flasher stub (default true)
-  - `:reset` - If true, perform the reset into bootloader sequence (default true)
-  - `:auto_reset` - If true, use UART DTR/RTS signals for reset (default false)
-  - `:reset_pin` - GPIO pin name for ESP32 reset pin
-  - `:boot_pin` - GPIO pin name for ESP32 boot pin 
-
-  If `uart_port` is "auto", the library will attempt to find a connected ESP32.
+  - `:baud_rate` - speed used after connecting (default 115200)
+  - `:initial_baud_rate` - speed used to connect and load the stub (default 115200)
+  - `:use_stub` - load the flasher stub (default true)
+  - `:reset` - reset the chip into the bootloader (default true)
+  - `:reset_pin`, `:boot_pin` - `Circuits.GPIO` pins wired to EN and IO0; without
+    them DTR/RTS are used
+  - `:connect_attempts` - reset and sync attempts (default 7)
   """
-  @spec connect(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
-  def connect(uart_port, opts \\ [])
+  @spec connect(String.t() | :auto, keyword()) :: {:ok, Device.t()} | {:error, term()}
+  def connect(port, opts \\ [])
 
-  def connect("auto", opts) do
-    case find_port() do
-      {:ok, port} -> connect(port, opts)
-      {:error, reason} -> {:error, reason}
-    end
+  def connect(:auto, opts) do
+    with {:ok, port} <- find_port(), do: connect(port, opts)
   end
 
-  def connect(uart_port, opts) do
-    initial_baud = Keyword.get(opts, :initial_baud_rate, 115_200)
-    final_baud = Keyword.get(opts, :baud_rate, initial_baud)
-    use_stub = Keyword.get(opts, :use_stub, true)
+  def connect(port, opts) when is_binary(port) do
+    initial_baud = Keyword.get(opts, :initial_baud_rate, @default_baud)
 
-    with {:ok, uart} <- UART.open(uart_port, initial_baud) do
-      case do_connect(uart, opts, use_stub, initial_baud, final_baud) do
-        {:ok, uart} ->
-          {:ok, uart}
+    with {:ok, uart} <- UART.open(port, initial_baud) do
+      device = %Device{uart: uart, port: port, baud: initial_baud}
 
-        error ->
+      case establish(device, Reset.strategy(opts, UART.usb_ids(port)), opts) do
+        {:ok, device} ->
+          {:ok, device}
+
+        {:error, reason} ->
           UART.close(uart)
-          error
+          {:error, reason}
       end
     end
   end
 
-  defp do_connect(uart, opts, use_stub, initial_baud, final_baud) do
-    with :ok <- maybe_reset_into_bootloader(uart, opts),
-         :ok <- Bootloader.sync(uart),
-         :ok <- maybe_load_stub(uart, use_stub),
-         :ok <- maybe_change_baud(uart, initial_baud, final_baud) do
-      {:ok, uart}
+  @doc false
+  # Everything connect/2 does after the port is open
+  def establish(device, strategy, opts) do
+    attempts = Keyword.get(opts, :connect_attempts, @connect_attempts)
+
+    with {:ok, stub_running?} <- enter_bootloader(device, strategy, opts, 0, attempts),
+         {:ok, chip} <- Bootloader.detect_chip(device),
+         device = %{device | chip: chip, stub?: stub_running?},
+         {:ok, device} <- detect_usb_otg(device),
+         {:ok, device} <- maybe_load_stub(device, Keyword.get(opts, :use_stub, true)) do
+      maybe_change_baud(device, Keyword.get(opts, :baud_rate, device.baud))
     end
   end
 
-  defp maybe_load_stub(_uart, false), do: :ok
+  defp enter_bootloader(device, strategy, opts, attempt, attempts) when attempt < attempts do
+    UART.flush(device.uart)
 
-  defp maybe_load_stub(uart, true) do
-    with {:ok, chip_family} <- Bootloader.detect_chip(uart, false) do
-      Bootloader.load_stub(uart, chip_family)
+    with :ok <- Reset.run(strategy, device.uart, opts, attempt) do
+      case try_sync(device, @sync_attempts) do
+        {:ok, stub_running?} -> {:ok, stub_running?}
+        {:error, _} -> enter_bootloader(device, strategy, opts, attempt + 1, attempts)
+      end
     end
   end
 
-  defp maybe_change_baud(_uart, baud, baud), do: :ok
+  defp enter_bootloader(_device, _strategy, _opts, _attempt, _attempts),
+    do: {:error, :sync_failed}
 
-  defp maybe_change_baud(uart, initial_baud, final_baud) do
-    with :ok <- Bootloader.change_baud(uart, final_baud, initial_baud),
-         :ok <- UART.configure(uart, speed: final_baud) do
-      UART.drain(uart)
-      :ok
+  defp try_sync(_device, 0), do: {:error, :sync_failed}
+
+  defp try_sync(device, attempts) do
+    UART.flush(device.uart)
+
+    case Bootloader.sync(device) do
+      {:ok, stub_running?} ->
+        {:ok, stub_running?}
+
+      {:error, _} ->
+        Process.sleep(50)
+        try_sync(device, attempts - 1)
     end
   end
 
-  @doc """
-  Attempts to find a connected ESP32 or USB-to-Serial bridge.
+  # Native USB-OTG limits block sizes; the ROM records which console it is using
+  defp detect_usb_otg(device) do
+    case Chip.usb_otg_check(device.chip) do
+      nil ->
+        {:ok, device}
 
-  Returns `{:ok, port}` if found, or `{:error, :no_port_found}`.
-  """
+      {reg, value} ->
+        with {:ok, read} <- Bootloader.read_reg(device, reg) do
+          {:ok, %{device | usb_otg?: (read &&& 0xFF) == value}}
+        end
+    end
+  end
+
+  defp maybe_load_stub(%{stub?: true} = device, _use_stub), do: {:ok, device}
+  defp maybe_load_stub(device, false), do: {:ok, device}
+  defp maybe_load_stub(device, true), do: Bootloader.load_stub(device)
+
+  defp maybe_change_baud(%{baud: baud} = device, baud), do: {:ok, device}
+  defp maybe_change_baud(device, baud), do: Bootloader.change_baud(device, baud)
+
+  @doc "Closes the serial port."
+  @spec close(Device.t()) :: :ok
+  def close(%Device{uart: uart}), do: UART.close(uart)
+
+  @doc "Finds the first serial port backed by an Espressif chip or a common USB-serial bridge."
   @spec find_port() :: {:ok, String.t()} | {:error, :no_port_found}
   def find_port do
-    # Known Vendor/Product IDs
-    # Espressif USB JTAG/Serial: 0x303A:0x1001
-    # CP210x: 0x10C4:0xEA60
-    # CH340: 0x1A86:0x7523
-    # FTDI: 0x0403:0x6001
     Circuits.UART.enumerate()
-    |> Enum.find(fn {_port, info} ->
-      vid = Map.get(info, :vendor_id)
-      pid = Map.get(info, :product_id)
-
-      is_espressif?(vid, pid) or is_known_bridge?(vid, pid)
-    end)
+    |> Enum.filter(fn {_port, info} -> info[:vendor_id] in @bridge_vids end)
+    |> Enum.map(fn {port, _info} -> port end)
+    |> Enum.sort()
     |> case do
-      {port, _info} -> {:ok, port}
-      nil -> {:error, :no_port_found}
+      [port | _] -> {:ok, port}
+      [] -> {:error, :no_port_found}
     end
   end
 
-  # Espressif VID
-  defp is_espressif?(0x303A, _), do: true
-  defp is_espressif?(_, _), do: false
-
-  # Silicon Labs CP210x VID
-  defp is_known_bridge?(0x10C4, _), do: true
-  # QinHeng CH340 VID
-  defp is_known_bridge?(0x1A86, _), do: true
-  # FTDI VID
-  defp is_known_bridge?(0x0403, _), do: true
-  defp is_known_bridge?(_, _), do: false
-
-  defp maybe_reset_into_bootloader(uart, opts) do
-    do_reset = Keyword.get(opts, :reset, true)
-    reset_strategy = reset_strategy(opts)
-
-    case {do_reset, reset_strategy} do
-      {false, _} ->
-        :ok
-
-      {true, :manual_reset} ->
-        reset_pin = Keyword.get(opts, :reset_pin)
-        boot_pin = Keyword.get(opts, :boot_pin)
-        GPIO.enter_bootloader_mode(reset_pin, boot_pin)
-
-      {true, :usb_jtag_auto_reset} ->
-        UART.usb_jtag_serial_reset(uart)
-
-      {true, :classic_auto_reset} ->
-        UART.auto_reset(uart)
-    end
-  end
-
-  defp reset_strategy(opts) do
-    cond do
-      not Keyword.get(opts, :auto_reset, false) -> :manual_reset
-      built_in_usb_jtag?() -> :usb_jtag_auto_reset
-      true -> :classic_auto_reset
-    end
-  end
-
-  defp built_in_usb_jtag? do
-    Enum.any?(Circuits.UART.enumerate(), fn {_, info} ->
-      Map.get(info, :vendor_id) == 0x303A
-    end)
-  end
-
   @doc """
-  Erases the entire SPI flash memory of the ESP device.
-
-  Note: This command is only supported when the flasher stub is loaded.
-  The operation can take up to 120 seconds depending on the flash chip.
-  """
-  @spec erase(pid(), keyword()) :: :ok | {:error, any()}
-  def erase(uart, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, 120_000)
-    Bootloader.erase_flash(uart, timeout)
-  end
-
-  @doc """
-  Synchronizes with the ESP32 bootloader.
-  """
-  @spec sync(pid()) :: :ok | {:error, any()}
-  defdelegate sync(uart), to: Bootloader
-
-  @doc """
-  Reads a 32-bit register from the ESP32.
-  """
-  @spec read_reg(pid(), integer()) :: {:ok, integer()} | {:error, any()}
-  defdelegate read_reg(uart, address), to: Bootloader
-
-  @doc """
-  Detects the connected ESP32 chip type.
-  """
-  @spec detect_chip(pid()) :: {:ok, atom()} | {:error, any()}
-  defdelegate detect_chip(uart), to: Bootloader
-
-  @doc """
-  Parses an ESP32 firmware image (.bin).
-  """
-  @spec parse_image(binary()) :: {:ok, map(), binary()} | {:error, any()}
-  defdelegate parse_image(binary), to: Esp32.Image, as: :parse
-
-  @doc """
-  Flashes a firmware image file (.bin) to the ESP32.
-
-  This function reads the file from disk, performs a safety check to ensure
-  it is a valid ESP32 image, and then flashes it.
-
-  If the `offset` matches the chip's bootloader offset, the header is patched
-  with the provided `:flash_mode`, `:flash_freq`, and `:flash_size` options.
+  Writes `binary` to flash at `offset`.
 
   Options:
-  - `:flash_mode` - "qio", "qout", "dio", "dout" (default: "keep")
-  - `:flash_freq` - "40m", "26m", "20m", "80m" (default: "keep")
-  - `:flash_size` - "1MB", "2MB", "4MB", "8MB", "16MB" (default: "keep")
-  - `:is_stub` - Use stub protocol (default true)
-  - `:reboot` - Reboot after flash (default false)
+  - `:flash_mode`, `:flash_freq`, `:flash_size` - rewrite the header of a bootloader
+    image, see `Esp32.Image.patch_header/3` (default `:keep`)
+  - `:verify` - compare the flash MD5 afterwards (default true)
+  - `:reboot` - reset the chip when done (default false)
+
+  Images built for a different chip are refused; other data is written as is.
   """
-  @spec flash_file(pid(), String.t(), integer(), keyword()) :: :ok | {:error, any()}
-
-  def flash_file(uart, path, offset, opts \\ []) do
-    with {:ok, binary} <- File.read(path),
-         {:ok, _metadata, _footer} <- parse_image(binary),
-         {:ok, chip_family} <- detect_chip(uart) do
-      # If flashing to bootloader offset, patch the header
-      final_binary =
-        if offset == Bootloader.bootloader_offset(chip_family) do
-          Esp32.Image.patch_header(binary, chip_family, opts)
-        else
-          binary
-        end
-
-      flash(uart, final_binary, offset, opts)
+  @spec flash(Device.t(), binary(), non_neg_integer(), keyword()) :: :ok | {:error, term()}
+  def flash(%Device{} = device, binary, offset, opts \\ []) do
+    with {:ok, binary} <- prepare_image(device, binary, offset, opts),
+         :ok <- maybe_spi_attach(device),
+         {:ok, block_size} <- Bootloader.flash_begin(device, byte_size(binary), offset),
+         :ok <- write_blocks(device, binary, block_size),
+         :ok <- maybe_verify(device, binary, offset, Keyword.get(opts, :verify, true)) do
+      finish(device, Keyword.get(opts, :reboot, false))
     end
   end
 
-  @doc """
-  Flashes a binary to the ESP32 at the specified memory offset.
+  @doc "Reads `path` and writes it with `flash/4`."
+  @spec flash_file(Device.t(), Path.t(), non_neg_integer(), keyword()) :: :ok | {:error, term()}
+  def flash_file(device, path, offset, opts \\ []) do
+    with {:ok, binary} <- File.read(path), do: flash(device, binary, offset, opts)
+  end
 
-  Options:
-  - `:is_stub` - Use stub protocol (default true)
-  - `:reboot` - Reboot after flash (default false)
-  """
-  @spec flash(pid(), binary(), integer(), keyword()) :: :ok | {:error, any()}
-  def flash(uart, binary, offset, opts \\ []) do
-    is_stub = Keyword.get(opts, :is_stub, true)
-    # 16KB for stub, 1KB for ROM
-    packet_size = if is_stub, do: 0x4000, else: 0x400
+  defp prepare_image(device, binary, offset, opts) do
+    with {:ok, binary} <- maybe_patch_header(device, binary, offset, opts) do
+      case Image.parse(binary) do
+        {:ok, %Image{chip: chip}} when chip != device.chip and device.chip != :esp8266 ->
+          {:error, {:wrong_chip, chip}}
 
-    num_packets = div(byte_size(binary) + packet_size - 1, packet_size)
-    size_to_erase = byte_size(binary)
-
-    with :ok <- if(is_stub, do: :ok, else: Bootloader.spi_attach(uart, is_stub)),
-         :ok <-
-           Bootloader.flash_begin(uart, size_to_erase, num_packets, packet_size, offset, is_stub) do
-      binary
-      |> pad_and_chunk(packet_size)
-      |> Enum.reduce_while(:ok, fn {chunk, seq}, :ok ->
-        case Bootloader.flash_data(uart, chunk, seq, is_stub) do
-          :ok -> {:cont, :ok}
-          error -> {:halt, error}
-        end
-      end)
-      |> case do
-        :ok ->
-          reboot = Keyword.get(opts, :reboot, false)
-          Bootloader.flash_end(uart, reboot, is_stub)
-
-        error ->
-          error
+        _ ->
+          {:ok, binary}
       end
     end
   end
 
-  # Pads the binary to a multiple of block_size with 0xFF, then chunks it.
-  # The ESP32 flash protocol requires the last block to be padded.
-  defp pad_and_chunk(binary, block_size) do
-    remainder = rem(byte_size(binary), block_size)
-
-    padded =
-      if remainder == 0,
-        do: binary,
-        else: binary <> :binary.copy(<<0xFF>>, block_size - remainder)
-
-    padded
-    |> Bootloader.chunk_binary(block_size)
-    |> Enum.with_index()
+  defp maybe_patch_header(device, binary, offset, opts) do
+    if offset == Chip.bootloader_offset(device.chip),
+      do: Image.patch_header(binary, device.chip, opts),
+      else: {:ok, binary}
   end
+
+  defp maybe_spi_attach(%{stub?: true}), do: :ok
+  defp maybe_spi_attach(device), do: Bootloader.spi_attach(device)
+
+  defp write_blocks(device, binary, block_size) do
+    binary
+    |> pad(block_size)
+    |> Bootloader.chunk(block_size)
+    |> Enum.with_index()
+    |> Bootloader.reduce_ok(fn {block, seq} -> Bootloader.flash_block(device, block, seq) end)
+  end
+
+  # The last block is padded with 0xFF, the value of erased flash
+  defp pad(binary, block_size) do
+    case rem(byte_size(binary), block_size) do
+      0 -> binary
+      used -> binary <> :binary.copy(<<0xFF>>, block_size - used)
+    end
+  end
+
+  defp maybe_verify(_device, _binary, _offset, false), do: :ok
+  defp maybe_verify(%{stub?: false, chip: :esp8266}, _binary, _offset, true), do: :ok
+
+  defp maybe_verify(device, binary, offset, true) do
+    with {:ok, digest} <- Bootloader.flash_md5(device, offset, byte_size(binary)) do
+      if digest == :crypto.hash(:md5, binary), do: :ok, else: {:error, :verify_failed}
+    end
+  end
+
+  # FLASH_END makes the ROM loader exit, so the ROM only gets it when rebooting
+  defp finish(%{stub?: false}, false), do: :ok
+  defp finish(device, reboot?), do: Bootloader.flash_end(device, reboot?)
+
+  @doc "Erases the whole flash chip. Requires the flasher stub; may take up to two minutes."
+  @spec erase(Device.t()) :: :ok | {:error, term()}
+  def erase(%Device{} = device), do: Bootloader.erase_flash(device)
+
+  @doc "Reads a 32-bit register."
+  @spec read_reg(Device.t(), non_neg_integer()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def read_reg(%Device{} = device, address), do: Bootloader.read_reg(device, address)
+
+  @doc "Writes a 32-bit register."
+  @spec write_reg(Device.t(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, term()}
+  def write_reg(%Device{} = device, address, value),
+    do: Bootloader.write_reg(device, address, value)
 end
