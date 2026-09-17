@@ -62,6 +62,18 @@ defmodule Esp32.BootloaderTest do
       device = device(fn _ -> List.duplicate(response(:sync, <<0, 0>>), 101) end)
       assert {:error, :no_response} = Bootloader.command(device, :read_reg, <<0::little-32>>)
     end
+
+    test "reports an unsupported command when the ROM answers with invalid-command errors" do
+      device =
+        device(fn {0x14, _} -> List.duplicate(response(:sync, <<1, 5, 0, 0>>), 8) end,
+          stub?: false
+        )
+
+      assert {:error, {:unsupported_command, :get_security_info}} =
+               Bootloader.command(device, :get_security_info)
+
+      assert :flush in FakeUART.calls(device.uart)
+    end
   end
 
   test "read_reg/2 and write_reg/3" do
@@ -156,7 +168,7 @@ defmodule Esp32.BootloaderTest do
     test "falls back to the magic register past the ROM's eight error replies" do
       device =
         device(fn
-          {0x14, _} -> List.duplicate(response(:get_security_info, <<1, 5, 0, 0>>), 8)
+          {0x14, _} -> List.duplicate(response(:sync, <<1, 5, 0, 0>>), 8)
           {0x0A, <<0x40001000::little-32>>} -> [response(:read_reg, <<0, 0, 0, 0>>, 0x00F01D83)]
         end)
 

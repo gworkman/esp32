@@ -15,6 +15,7 @@ defmodule Esp32.Bootloader do
   @erase_region_timeout_per_mb 30_000
   @md5_timeout_per_mb 8_000
   @write_block_attempts 3
+  @rom_invalid_command 0x05
 
   @doc """
   Sends `op` and returns `{:ok, value, data}` once a matching, successful response arrives.
@@ -23,7 +24,8 @@ defmodule Esp32.Bootloader do
 
   Error reasons, returned as `{:error, reason}`: `{op, error_byte}` for a
   failed status, `{op, :short_response}`, `:timeout` when no frame arrives,
-  `:no_response` when 100 frames arrive without a matching response.
+  `:no_response` when 100 frames arrive without a matching response,
+  `{:unsupported_command, op}` when the loader does not know the command.
   """
   @spec command(Device.t(), Protocol.op(), binary(), keyword()) ::
           {:ok, non_neg_integer(), binary()} | {:error, term()}
@@ -58,11 +60,26 @@ defmodule Esp32.Bootloader do
   def read_response(device, op_id, timeout, reads_left) do
     with {:ok, frame} <- UART.read_frame(device.uart, timeout) do
       case Protocol.parse_response(frame) do
-        {:ok, ^op_id, value, data} -> {:ok, value, data}
-        {:ok, _op, value, data} when is_nil(op_id) -> {:ok, value, data}
-        _ -> read_response(device, op_id, timeout, reads_left - 1)
+        {:ok, ^op_id, value, data} ->
+          {:ok, value, data}
+
+        {:ok, _op, value, data} when is_nil(op_id) ->
+          {:ok, value, data}
+
+        {:ok, _op, _value, <<status, @rom_invalid_command, _::binary>>} when status != 0 ->
+          unsupported_command(device, op_id)
+
+        _ ->
+          read_response(device, op_id, timeout, reads_left - 1)
       end
     end
+  end
+
+  # The ROM sends its invalid-command reply eight times; drain them before the next command
+  defp unsupported_command(device, op_id) do
+    Process.sleep(200)
+    UART.flush(device.uart)
+    {:error, {:unsupported_command, Protocol.command_name(op_id)}}
   end
 
   @spec read_reg(Device.t(), non_neg_integer()) :: {:ok, non_neg_integer()} | {:error, term()}
