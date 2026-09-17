@@ -302,4 +302,127 @@ defmodule Esp32.BootloaderTest do
       assert {:error, :stub_required} = Bootloader.change_baud(device, 921_600)
     end
   end
+
+  test "flash_block_size/1" do
+    assert Bootloader.flash_block_size(%Device{stub?: true}) == 0x4000
+    assert Bootloader.flash_block_size(%Device{stub?: false}) == 0x400
+    assert Bootloader.flash_block_size(%Device{stub?: true, usb_otg?: true}) == 0x800
+  end
+
+  test "spi_attach/1 sends the ROM's 8-byte argument" do
+    device = device(fn {0x0D, _} -> [response(:spi_attach, <<0, 0, 0, 0>>)] end, stub?: false)
+    assert :ok = Bootloader.spi_attach(device)
+    assert [{0x0D, <<0::little-32, 0::little-32>>}] = FakeUART.writes(device.uart)
+  end
+
+  describe "flash_begin/3" do
+    test "stub: four words plus the encrypted word" do
+      device = device(fn {0x02, _} -> [response(:flash_begin, <<0, 0>>)] end, stub?: true)
+      assert {:ok, 0x4000} = Bootloader.flash_begin(device, 0x5000, 0x10000)
+
+      assert [
+               {0x02,
+                <<0x5000::little-32, 2::little-32, 0x4000::little-32, 0x10000::little-32,
+                  0::little-32>>}
+             ] =
+               FakeUART.writes(device.uart)
+    end
+
+    test "ESP32 ROM: four words only" do
+      device =
+        device(fn {0x02, _} -> [response(:flash_begin, <<0, 0, 0, 0>>)] end,
+          chip: :esp32,
+          stub?: false
+        )
+
+      assert {:ok, 0x400} = Bootloader.flash_begin(device, 0x401, 0x1000)
+
+      assert [{0x02, <<0x401::little-32, 2::little-32, 0x400::little-32, 0x1000::little-32>>}] =
+               FakeUART.writes(device.uart)
+    end
+
+    test "ESP32-C3 ROM: four words plus the encrypted word" do
+      device =
+        device(fn {0x02, _} -> [response(:flash_begin, <<0, 0, 0, 0>>)] end,
+          chip: :esp32c3,
+          stub?: false
+        )
+
+      assert {:ok, 0x400} = Bootloader.flash_begin(device, 0x400, 0x0)
+
+      assert [
+               {0x02,
+                <<0x400::little-32, 1::little-32, 0x400::little-32, 0::little-32, 0::little-32>>}
+             ] = FakeUART.writes(device.uart)
+    end
+  end
+
+  describe "flash_block/3" do
+    test "retries a failed block up to three times" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      device =
+        device(fn {0x03, _} ->
+          if Agent.get_and_update(counter, &{&1, &1 + 1}) < 2,
+            do: [response(:flash_data, <<1, 6>>)],
+            else: [response(:flash_data, <<0, 0>>)]
+        end)
+
+      assert :ok = Bootloader.flash_block(device, <<1, 2, 3>>, 4)
+      assert length(FakeUART.writes(device.uart)) == 3
+    end
+
+    test "gives up after three attempts" do
+      device = device(fn {0x03, _} -> [response(:flash_data, <<1, 6>>)] end)
+      assert {:error, {:flash_data, 6}} = Bootloader.flash_block(device, <<1>>, 0)
+      assert length(FakeUART.writes(device.uart)) == 3
+    end
+
+    test "sends the block header, data and checksum" do
+      device = device(fn {0x03, _} -> [response(:flash_data, <<0, 0>>)] end)
+      assert :ok = Bootloader.flash_block(device, <<0xAA, 0xBB>>, 7)
+
+      assert [{0x03, <<2::little-32, 7::little-32, 0::little-32, 0::little-32, 0xAA, 0xBB>>}] =
+               FakeUART.writes(device.uart)
+    end
+  end
+
+  test "flash_end/2 encodes reboot as 0 and run-user-code as 1" do
+    device = device(fn {0x04, _} -> [response(:flash_end, <<0, 0>>)] end)
+    assert :ok = Bootloader.flash_end(device, true)
+    assert :ok = Bootloader.flash_end(device, false)
+    assert [{0x04, <<0::little-32>>}, {0x04, <<1::little-32>>}] = FakeUART.writes(device.uart)
+  end
+
+  describe "flash_md5/3" do
+    test "stub returns 16 raw bytes" do
+      digest = :crypto.hash(:md5, "abc")
+
+      device =
+        device(fn {0x13, _} -> [response(:spi_flash_md5, digest <> <<0, 0>>)] end, stub?: true)
+
+      assert {:ok, ^digest} = Bootloader.flash_md5(device, 0x10000, 3)
+
+      assert [{0x13, <<0x10000::little-32, 3::little-32, 0::little-32, 0::little-32>>}] =
+               FakeUART.writes(device.uart)
+    end
+
+    test "ROM returns 32 hex characters" do
+      digest = :crypto.hash(:md5, "abc")
+      hex = Base.encode16(digest, case: :lower)
+
+      device =
+        device(fn {0x13, _} -> [response(:spi_flash_md5, hex <> <<0, 0, 0, 0>>)] end,
+          stub?: false
+        )
+
+      assert {:ok, ^digest} = Bootloader.flash_md5(device, 0, 3)
+    end
+  end
+
+  test "erase_flash/1 requires the stub" do
+    device = device(fn {0xD0, <<>>} -> [response(:erase_flash, <<0, 0>>)] end, stub?: true)
+    assert :ok = Bootloader.erase_flash(device)
+    assert {:error, :stub_required} = Bootloader.erase_flash(%{device | stub?: false})
+  end
 end

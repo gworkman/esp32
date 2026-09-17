@@ -11,6 +11,10 @@ defmodule Esp32.Bootloader do
   @sync_timeout 100
   @magic_reg 0x40001000
   @mem_end_rom_timeout 200
+  @chip_erase_timeout 120_000
+  @erase_region_timeout_per_mb 30_000
+  @md5_timeout_per_mb 8_000
+  @write_block_attempts 3
 
   @doc """
   Sends `op` and returns `{:ok, value, data}` once a matching, successful response arrives.
@@ -299,4 +303,95 @@ defmodule Esp32.Bootloader do
   end
 
   defp change_baud_params(_device, baud), do: {:ok, <<baud::little-32, 0::little-32>>}
+
+  @doc "Flash write block size: 0x4000 for the stub, 0x400 for the ROM, 0x800 over USB-OTG."
+  @spec flash_block_size(Device.t()) :: pos_integer()
+  def flash_block_size(%{usb_otg?: true}), do: 0x800
+  def flash_block_size(%{stub?: true}), do: 0x4000
+  def flash_block_size(_device), do: 0x400
+
+  @doc "Attaches the SPI flash. Needed on the ROM loader; the stub does this itself."
+  @spec spi_attach(Device.t()) :: :ok | {:error, term()}
+  def spi_attach(device) do
+    data = if device.stub?, do: <<0::little-32>>, else: <<0::little-32, 0::little-32>>
+    with {:ok, _, _} <- command(device, :spi_attach, data), do: :ok
+  end
+
+  @doc "Starts a flash write of `size` bytes at `offset`; the ROM erases the region up front."
+  @spec flash_begin(Device.t(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, pos_integer()} | {:error, term()}
+  def flash_begin(device, size, offset) do
+    block_size = flash_block_size(device)
+    blocks = div(size + block_size - 1, block_size)
+    params = <<size::little-32, blocks::little-32, block_size::little-32, offset::little-32>>
+
+    params =
+      if device.stub? or Chip.rom_extended_flash_begin?(device.chip),
+        do: params <> <<0::little-32>>,
+        else: params
+
+    timeout =
+      if device.stub?,
+        do: @default_timeout,
+        else: timeout_per_mb(@erase_region_timeout_per_mb, size)
+
+    with {:ok, _, _} <- command(device, :flash_begin, params, timeout: timeout),
+         do: {:ok, block_size}
+  end
+
+  @doc "Writes block `seq`, retrying up to three times."
+  @spec flash_block(Device.t(), binary(), non_neg_integer()) :: :ok | {:error, term()}
+  def flash_block(device, data, seq, attempts \\ @write_block_attempts) do
+    payload =
+      <<byte_size(data)::little-32, seq::little-32, 0::little-32, 0::little-32, data::binary>>
+
+    timeout = @default_timeout + div(byte_size(data) * 20_000, device.baud)
+
+    case command(device, :flash_data, payload,
+           checksum: Protocol.checksum(data),
+           timeout: timeout
+         ) do
+      {:ok, _, _} -> :ok
+      {:error, _} when attempts > 1 -> flash_block(device, data, seq, attempts - 1)
+      error -> error
+    end
+  end
+
+  @doc "Leaves flash mode; `reboot?` resets the chip instead of running the loader."
+  @spec flash_end(Device.t(), boolean()) :: :ok | {:error, term()}
+  def flash_end(device, reboot?) do
+    run_user_code = if reboot?, do: 0, else: 1
+    with {:ok, _, _} <- command(device, :flash_end, <<run_user_code::little-32>>), do: :ok
+  end
+
+  @doc "MD5 digest of `size` bytes of flash at `offset`."
+  @spec flash_md5(Device.t(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, binary()} | {:error, term()}
+  def flash_md5(device, offset, size) do
+    data = <<offset::little-32, size::little-32, 0::little-32, 0::little-32>>
+    resp_len = if device.stub?, do: 16, else: 32
+    opts = [resp_data_len: resp_len, timeout: timeout_per_mb(@md5_timeout_per_mb, size)]
+
+    with {:ok, _, digest} <- command(device, :spi_flash_md5, data, opts) do
+      if device.stub?, do: {:ok, digest}, else: decode_hex(digest)
+    end
+  end
+
+  defp decode_hex(hex) do
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, digest} -> {:ok, digest}
+      :error -> {:error, {:spi_flash_md5, :invalid_response}}
+    end
+  end
+
+  @doc "Erases the whole flash chip (stub only)."
+  @spec erase_flash(Device.t()) :: :ok | {:error, term()}
+  def erase_flash(%{stub?: false}), do: {:error, :stub_required}
+
+  def erase_flash(device) do
+    with {:ok, _, _} <- command(device, :erase_flash, <<>>, timeout: @chip_erase_timeout), do: :ok
+  end
+
+  defp timeout_per_mb(ms_per_mb, size),
+    do: max(@default_timeout, div(ms_per_mb * size, 1_000_000))
 end
