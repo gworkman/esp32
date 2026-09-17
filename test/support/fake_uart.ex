@@ -4,6 +4,12 @@ defmodule Esp32.FakeUART do
 
   Each written command is passed to the handler as `{op_id, payload}`; the frames
   it returns are queued for subsequent reads, as the SLIP framing would produce them.
+
+  It answers the `GenServer.call` tuples `Circuits.UART` itself sends (`{:write,
+  data, timeout}`, `{:read, timeout}`, `{:flush, direction}`, `{:configure, opts}`,
+  `{:set_dtr, v}`, `{:set_rts, v}`, `:close`), so it must be revisited if that
+  library changes them. Reads never block: an empty queue answers `{:ok, <<>>}`
+  at once, so timeouts and stalls are not simulated.
   """
 
   use GenServer

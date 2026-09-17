@@ -6,7 +6,9 @@ reset and strapping pins to automate entry into bootloader mode.
 
 ## Features
 
-- Supports all families of ESP32 chips
+- Flasher-stub support for ESP32, S2, S3, C2, C3, C5, C6, C61, H2, P4 and
+  ESP8266; other families (H21, H4, E22, S31) can be flashed through the ROM
+  loader with `use_stub: false`
 - Two stage bootloader, including stub loading for flash programming
 - Automatic discovery and reset of USB-connected ESP32 devices
 
