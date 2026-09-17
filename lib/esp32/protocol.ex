@@ -52,8 +52,9 @@ defmodule Esp32.Protocol do
     <<0x00, command_id(op), byte_size(data)::little-16, checksum::little-32, data::binary>>
   end
 
+  @doc "Splits a response frame; the size field is ignored because the stub under-reports it."
   @spec parse_response(term()) :: {:ok, byte(), non_neg_integer(), binary()} | :error
-  def parse_response(<<0x01, op, size::little-16, value::little-32, data::binary-size(size)>>) do
+  def parse_response(<<0x01, op, _size::little-16, value::little-32, data::binary>>) do
     {:ok, op, value, data}
   end
 

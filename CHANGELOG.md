@@ -30,6 +30,8 @@ and this project adheres to
 
 - Serial ports listed by full path (macOS) are now matched when choosing the reset
   strategy, so USB-JTAG/Serial boards reset correctly there.
+- Response frames whose size field under-reports the payload (the stub's
+  `GET_SECURITY_INFO` reply) are no longer dropped.
 - `flash_size:` is also sent to the loader (`SPI_SET_PARAMS`), so the ROM loader can
   write beyond its 2 MB default.
 

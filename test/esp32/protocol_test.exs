@@ -17,12 +17,17 @@ defmodule Esp32.ProtocolTest do
     assert Protocol.build_command(:sync, 0, <<0x01>>) == <<0x00, 0x08, 1, 0, 0, 0, 0, 0, 0x01>>
   end
 
+  test "parse_response/1 ignores the size field, as the stub under-reports it" do
+    frame = <<0x01, 0x14, 20::little-16, 0::little-32, 1, 2, 3, 0, 0>>
+    assert Protocol.parse_response(frame) == {:ok, 0x14, 0, <<1, 2, 3, 0, 0>>}
+  end
+
   test "parse_response/1" do
     assert Protocol.parse_response(<<0x01, 0x08, 4::little-16, 7::little-32, 1, 2, 3, 4>>) ==
              {:ok, 0x08, 7, <<1, 2, 3, 4>>}
 
     assert Protocol.parse_response(<<0x00, 0x08, 0::little-16, 0::little-32>>) == :error
-    assert Protocol.parse_response(<<0x01, 0x08, 9::little-16, 0::little-32, 1>>) == :error
+    assert Protocol.parse_response(<<0x01, 0x08, 0::little-16, 0::little>>) == :error
     assert Protocol.parse_response({:error, :invalid_escape}) == :error
   end
 
