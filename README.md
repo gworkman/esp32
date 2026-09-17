@@ -12,47 +12,52 @@ reset and strapping pins to automate entry into bootloader mode.
 
 ## Usage
 
-To use `Esp32`, you need to provide the UART port and reset/boot options. For
-many development boards, you can use the automatic reset feature via DTR/RTS.
-
 ```elixir
-# Automatic discovery and reset (common for devboards via DTR/RTS)
-{:ok, uart} = Esp32.connect("auto", auto_reset: true, baud_rate: 921600)
+# Find a USB-connected board, reset it via DTR/RTS, and load the flasher stub
+{:ok, esp} = Esp32.connect(:auto, baud_rate: 921_600)
+esp.chip #=> :esp32c3
 
-# Detect the chip family
-{:ok, chip} = Esp32.detect_chip(uart)
-IO.puts("Connected to: #{chip}")
+# Flash files; bootloader headers get their flash parameters patched
+:ok = Esp32.flash_file(esp, "bootloader.bin", 0x0, flash_mode: :dio, flash_size: "4MB")
+:ok = Esp32.flash_file(esp, "partition-table.bin", 0x8000)
+:ok = Esp32.flash_file(esp, "firmware.bin", 0x10000, reboot: true)
 
-# Flash a firmware file (patches header metadata if written to bootloader offset)
-:ok = Esp32.flash_file(uart, "firmware.bin", 0x10000, reboot: true)
-
-# Flash a raw binary blob
-binary_data = <<...>>
-:ok = Esp32.flash(uart, binary_data, 0x8000)
+# Or flash a binary you already have in memory
+:ok = Esp32.flash(esp, binary, 0x10000)
 
 # Erase the entire flash chip
-:ok = Esp32.erase(uart)
+:ok = Esp32.erase(esp)
 
-# Close the connection when done
-Esp32.UART.close(uart)
+Esp32.close(esp)
+```
+
+On Nerves hardware where EN and IO0 are wired to GPIOs, pass the pin names:
+
+```elixir
+{:ok, esp} = Esp32.connect("ttyS1", reset_pin: "GPIO17", boot_pin: "GPIO27")
 ```
 
 ### Connection Options
 
-When calling `Esp32.connect/2`, you can specify several options:
+- `:baud_rate` - speed used after connecting; higher rates such as 921600 speed up
+  flashing (default 115200).
+- `:initial_baud_rate` - speed used to connect and load the flasher stub (default
+  115200).
+- `:use_stub` - load the flasher stub. Without it flashing uses the slower ROM
+  loader and `erase/1` is unavailable (default `true`).
+- `:reset` - reset the chip into the bootloader. Set to `false` when it is already
+  there (default `true`).
+- `:reset_pin` and `:boot_pin` - `Circuits.GPIO` pin names wired to EN and IO0. When
+  absent, the DTR/RTS lines are used, with the sequence chosen by the port's USB ids.
+- `:connect_attempts` - how many reset/sync rounds to try (default 7).
 
-- `:initial_baud_rate` - The baud rate used for the initial synchronization and
-  loading the flasher stub (default: 115200).
-- `:baud_rate` - The target baud rate to use after the flasher stub is loaded.
-  This is typically much higher (e.g., 921600) to speed up flashing.
-- `:auto_reset` - When set to `true`, the library will use the DTR and RTS lines
-  to automatically put the ESP32 into bootloader mode. This is common for most
-  USB-based development boards.
-- `:reset` - When set to `false`, the library will skip the hardware reset
-  sequence and attempt to synchronize with an already running bootloader.
-  (default: `true`).
-- `:reset_pin` and `:boot_pin` - GPIO pin names to use for manual reset and
-  strapping pin control (e.g., for custom Nerves hardware).
+### Flash Options
+
+`flash/4` and `flash_file/4` accept `:flash_mode` (`:qio`, `:qout`, `:dio`, `:dout`),
+`:flash_freq` (e.g. `"40m"`) and `:flash_size` (e.g. `"4MB"`), which rewrite the
+header of an image written at the chip's bootloader offset; `:verify` (default
+`true`) compares the flash MD5 afterwards; `:reboot` (default `false`) resets the
+chip when done. Images built for a different chip are refused.
 
 ### Common Firmware Offsets
 
@@ -68,8 +73,7 @@ offsets vary depending on the chip family:
 | **ESP32-C3** | `0x0`      | `0x8000`        | `0x10000`   |
 | **ESP32-C6** | `0x0`      | `0x8000`        | `0x10000`   |
 
-_Note: For chips with a `0x0` bootloader offset, the library automatically
-handles header patching if you use `flash_file/4` at that address._
+_Note: `flash_file/4` patches the header when the offset matches the chip's bootloader offset (`0x1000` on ESP32/S2, `0x2000` on C5/P4, `0x0` elsewhere)._
 
 ## Installation
 
