@@ -159,7 +159,8 @@ defmodule Esp32 do
 
   Options:
   - `:flash_mode`, `:flash_freq`, `:flash_size` - rewrite the header of a bootloader
-    image, see `Esp32.Image.patch_header/3` (default `:keep`)
+    image, see `Esp32.Image.patch_header/3` (default `:keep`); `:flash_size` also
+    tells the loader the chip size, which the ROM loader otherwise assumes is 2 MB
   - `:verify` - compare the flash MD5 afterwards (default true)
   - `:reboot` - hard-reset the chip into the application when done, see `reset/1`
     (default false)
@@ -170,6 +171,7 @@ defmodule Esp32 do
   def flash(%Device{} = device, binary, offset, opts \\ []) do
     with {:ok, binary} <- prepare_image(device, binary, offset, opts),
          :ok <- maybe_spi_attach(device),
+         :ok <- maybe_set_flash_size(device, Keyword.get(opts, :flash_size, :keep)),
          {:ok, block_size} <- Bootloader.flash_begin(device, byte_size(binary), offset),
          :ok <- write_blocks(device, binary, block_size),
          :ok <- maybe_verify(device, binary, offset, Keyword.get(opts, :verify, true)) do
@@ -206,6 +208,15 @@ defmodule Esp32 do
 
   defp maybe_spi_attach(%{stub?: true}), do: :ok
   defp maybe_spi_attach(device), do: Bootloader.spi_attach(device)
+
+  defp maybe_set_flash_size(_device, :keep), do: :ok
+
+  defp maybe_set_flash_size(device, size) do
+    case Chip.flash_size_bytes(device.chip, size) do
+      {:ok, bytes} -> Bootloader.spi_set_params(device, bytes)
+      :error -> {:error, {:invalid_flash_size, size}}
+    end
+  end
 
   defp write_blocks(device, binary, block_size) do
     binary

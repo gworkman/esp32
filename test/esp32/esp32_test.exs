@@ -112,6 +112,9 @@ defmodule Esp32Test do
       {0x0D, _} ->
         [response(:spi_attach, @ok_rom)]
 
+      {0x0B, _} ->
+        [response(:spi_set_params, @ok_stub)]
+
       {0x02, _} ->
         [response(:flash_begin, @ok_stub)]
 
@@ -182,6 +185,22 @@ defmodule Esp32Test do
       assert :ok = Esp32.flash(device, image(), 0x10000, verify: false, reboot: true)
       assert ops(device) == [0x0D, 0x02, 0x03]
       assert {:set_rts, true} in FakeUART.calls(device.uart)
+    end
+
+    test "flash_size: tells the loader the chip size before writing", %{written: written} do
+      device = device(flash_handler(written), chip: :esp32c3, stub?: false)
+      assert :ok = Esp32.flash(device, image(), 0x300000, flash_size: "4MB", verify: false)
+      assert ops(device) == [0x0D, 0x0B, 0x02, 0x03]
+
+      assert {0x0B, <<0::little-32, 0x400000::little-32, _::binary>>} =
+               Enum.at(FakeUART.writes(device.uart), 1)
+
+      device = device(flash_handler(written), chip: :esp32c3, stub?: true)
+
+      assert {:error, {:invalid_flash_size, "3MB"}} =
+               Esp32.flash(device, image(), 0x300000, flash_size: "3MB")
+
+      assert ops(device) == []
     end
 
     test "refuses an image built for another chip", %{written: written} do

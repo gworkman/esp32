@@ -327,6 +327,18 @@ defmodule Esp32.BootloaderTest do
     assert Bootloader.flash_block_size(%Device{stub?: false, usb_otg?: true}) == 0x400
   end
 
+  test "spi_set_params/2 describes the flash chip to the loader" do
+    device = device(fn {0x0B, _} -> [response(:spi_set_params, <<0, 0, 0, 0>>)] end, stub?: false)
+    assert :ok = Bootloader.spi_set_params(device, 0x400000)
+
+    assert [
+             {0x0B,
+              <<0::little-32, 0x400000::little-32, 0x10000::little-32, 0x1000::little-32,
+                0x100::little-32, 0xFFFF::little-32>>}
+           ] =
+             FakeUART.writes(device.uart)
+  end
+
   test "spi_attach/1 sends the ROM's 8-byte argument" do
     device = device(fn {0x0D, _} -> [response(:spi_attach, <<0, 0, 0, 0>>)] end, stub?: false)
     assert :ok = Bootloader.spi_attach(device)

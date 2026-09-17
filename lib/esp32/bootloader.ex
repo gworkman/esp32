@@ -333,6 +333,17 @@ defmodule Esp32.Bootloader do
     with {:ok, _, _} <- command(device, :spi_attach, data), do: :ok
   end
 
+  @doc "Tells the loader the flash chip's size; the ROM assumes a small default otherwise."
+  @spec spi_set_params(Device.t(), pos_integer()) :: :ok | {:error, term()}
+  def spi_set_params(device, size) do
+    # id, total size, 64 KB blocks, 4 KB sectors, 256-byte pages, status mask (esptool's fixed values)
+    data =
+      <<0::little-32, size::little-32, 0x10000::little-32, 0x1000::little-32, 0x100::little-32,
+        0xFFFF::little-32>>
+
+    with {:ok, _, _} <- command(device, :spi_set_params, data), do: :ok
+  end
+
   @doc "Starts a flash write of `size` bytes at `offset`; the ROM erases the region up front."
   @spec flash_begin(Device.t(), non_neg_integer(), non_neg_integer()) ::
           {:ok, pos_integer()} | {:error, term()}

@@ -69,4 +69,12 @@ defmodule Esp32.ChipTest do
     assert Chip.flash_size(:esp8266, "512KB") == {:ok, 0x00}
     assert Chip.flash_size(:esp32, "3MB") == :error
   end
+
+  test "flash_size_bytes/2" do
+    assert Chip.flash_size_bytes(:esp8266, "512KB") == {:ok, 524_288}
+    assert Chip.flash_size_bytes(:esp32c3, "4MB") == {:ok, 4_194_304}
+    assert Chip.flash_size_bytes(:esp8266, "2MB-c1") == {:ok, 2_097_152}
+    assert Chip.flash_size_bytes(:esp32c3, "3MB") == :error
+    assert Chip.flash_size_bytes(:esp32c3, "512KB") == :error
+  end
 end

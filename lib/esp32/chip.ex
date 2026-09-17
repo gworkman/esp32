@@ -149,5 +149,16 @@ defmodule Esp32.Chip do
   @spec flash_size(name(), String.t()) :: {:ok, non_neg_integer()} | :error
   def flash_size(name, size), do: Map.fetch(fetch(name).sizes, size)
 
+  @doc "Byte size of a flash size label the chip accepts, such as `\"4MB\"` or `\"512KB\"`."
+  @spec flash_size_bytes(name(), String.t()) :: {:ok, pos_integer()} | :error
+  def flash_size_bytes(name, size) do
+    with {:ok, _header_value} <- flash_size(name, size),
+         [_, n, unit | _] <- Regex.run(~r/^(\d+)(KB|MB)/, size) do
+      {:ok, String.to_integer(n) * if(unit == "KB", do: 1024, else: 1024 * 1024)}
+    else
+      _ -> :error
+    end
+  end
+
   defp fetch(name), do: Map.fetch!(@chips, name)
 end
