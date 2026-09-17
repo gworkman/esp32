@@ -4,11 +4,13 @@ defmodule Esp32.Bootloader do
   """
 
   alias Esp32.{Chip, Device, Protocol, UART}
+  import Bitwise
 
   @default_timeout 3_000
   @max_response_reads 100
   @sync_timeout 100
   @magic_reg 0x40001000
+  @mem_end_rom_timeout 200
 
   @doc """
   Sends `op` and returns `{:ok, value, data}` once a matching, successful response arrives.
@@ -167,4 +169,134 @@ defmodule Esp32.Bootloader do
 
   defp lookup(nil, error), do: {:error, error}
   defp lookup(chip, _error), do: {:ok, chip}
+
+  @doc "RAM block size: USB-OTG limits transfers to 0x800 bytes."
+  @spec ram_block_size(Device.t()) :: pos_integer()
+  def ram_block_size(%{usb_otg?: true}), do: 0x800
+  def ram_block_size(_device), do: 0x1800
+
+  @spec mem_begin(
+          Device.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          pos_integer(),
+          non_neg_integer()
+        ) ::
+          :ok | {:error, term()}
+  def mem_begin(device, size, blocks, block_size, offset) do
+    data = <<size::little-32, blocks::little-32, block_size::little-32, offset::little-32>>
+    with {:ok, _, _} <- command(device, :mem_begin, data), do: :ok
+  end
+
+  @spec mem_data(Device.t(), binary(), non_neg_integer()) :: :ok | {:error, term()}
+  def mem_data(device, data, seq) do
+    payload =
+      <<byte_size(data)::little-32, seq::little-32, 0::little-32, 0::little-32, data::binary>>
+
+    with {:ok, _, _} <- command(device, :mem_data, payload, checksum: Protocol.checksum(data)),
+         do: :ok
+  end
+
+  @doc "Leaves RAM download mode and jumps to `entry` (0 to stay in the loader)."
+  @spec mem_end(Device.t(), non_neg_integer()) :: :ok | {:error, term()}
+  def mem_end(device, entry) do
+    no_entry = if entry == 0, do: 1, else: 0
+    timeout = if device.stub?, do: @default_timeout, else: @mem_end_rom_timeout
+
+    # The ROM may reset the UART before its reply is sent, so ROM failures are ignored
+    case command(device, :mem_end, <<no_entry::little-32, entry::little-32>>, timeout: timeout) do
+      {:ok, _, _} -> :ok
+      {:error, _} when not device.stub? -> :ok
+      error -> error
+    end
+  end
+
+  @doc "Uploads the flasher stub for `device.chip` into RAM and starts it."
+  @spec load_stub(Device.t()) :: {:ok, Device.t()} | {:error, term()}
+  def load_stub(device) do
+    with {:ok, stub} <- read_stub(device),
+         :ok <- upload_segment(device, stub["text"], stub["text_start"]),
+         :ok <- upload_segment(device, stub["data"], stub["data_start"]),
+         :ok <- mem_end(device, stub["entry"]),
+         :ok <- wait_for_ohai(device, @max_response_reads) do
+      {:ok, %{device | stub?: true}}
+    end
+  end
+
+  defp read_stub(device) do
+    with {:ok, name} <- stub_name(device),
+         {:ok, json} <- File.read(Application.app_dir(:esp32, "priv/stubs/#{name}.json")) do
+      Jason.decode(json)
+    end
+  end
+
+  # ESP32-P4 revisions below 3.0 need the rev1 stub
+  defp stub_name(%{chip: :esp32p4} = device) do
+    with {:ok, word} <- read_reg(device, 0x5012D04C) do
+      major = (word >>> 23 &&& 1) <<< 2 ||| (word >>> 4 &&& 0x03)
+      minor = word &&& 0x0F
+      {:ok, if(major * 100 + minor < 300, do: "esp32p4-rev1", else: "esp32p4")}
+    end
+  end
+
+  defp stub_name(device) do
+    case Chip.stub(device.chip) do
+      nil -> {:error, {:no_stub, device.chip}}
+      name -> {:ok, name}
+    end
+  end
+
+  defp upload_segment(_device, nil, _offset), do: :ok
+
+  defp upload_segment(device, encoded, offset) do
+    data = Base.decode64!(encoded)
+    block_size = ram_block_size(device)
+    blocks = chunk(data, block_size)
+
+    with :ok <- mem_begin(device, byte_size(data), length(blocks), block_size, offset) do
+      blocks
+      |> Enum.with_index()
+      |> reduce_ok(fn {block, seq} -> mem_data(device, block, seq) end)
+    end
+  end
+
+  defp wait_for_ohai(_device, 0), do: {:error, :stub_start_failed}
+
+  defp wait_for_ohai(device, reads_left) do
+    case UART.read_frame(device.uart, @default_timeout) do
+      {:ok, "OHAI"} -> :ok
+      {:ok, <<0x01, _::binary>>} -> wait_for_ohai(device, reads_left - 1)
+      {:ok, other} -> {:error, {:stub_start_failed, other}}
+      error -> error
+    end
+  end
+
+  @doc "Switches the device to `baud`, then the host UART."
+  @spec change_baud(Device.t(), pos_integer()) :: {:ok, Device.t()} | {:error, term()}
+  def change_baud(%{stub?: false, chip: :esp8266}, _baud), do: {:error, :stub_required}
+
+  def change_baud(device, baud) do
+    with {:ok, data} <- change_baud_params(device, baud),
+         {:ok, _, _} <- command(device, :change_baudrate, data),
+         :ok <- UART.set_baud(device.uart, baud) do
+      Process.sleep(50)
+      UART.flush(device.uart)
+      {:ok, %{device | baud: baud}}
+    end
+  end
+
+  defp change_baud_params(%{stub?: true, baud: current}, baud),
+    do: {:ok, <<baud::little-32, current::little-32>>}
+
+  # The ESP32 ROM derives its UART clock from a drifting calibration, so the request is pre-scaled
+  defp change_baud_params(%{chip: :esp32} = device, baud) do
+    with {:ok, cali} <- read_reg(device, 0x3FF5F06C),
+         {:ok, efuse} <- read_reg(device, 0x3FF5A010) do
+      rom_freq = (cali >>> 7 &&& 0x01FFFFFF) * 15625 * (efuse &&& 0xFF) / 40
+      valid_freq = if rom_freq > 33_000_000, do: 40_000_000, else: 26_000_000
+      {:ok, <<trunc(baud * rom_freq / valid_freq)::little-32, 0::little-32>>}
+    end
+  end
+
+  defp change_baud_params(_device, baud), do: {:ok, <<baud::little-32, 0::little-32>>}
 end
