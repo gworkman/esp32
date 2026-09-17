@@ -266,6 +266,16 @@ defmodule Esp32.BootloaderTest do
       device = device(fn _ -> [] end, chip: :esp32h4, stub?: false)
       assert {:error, {:no_stub, :esp32h4}} = Bootloader.load_stub(device)
     end
+
+    test "ignores undecodable frames before OHAI" do
+      handler = fn
+        {0x06, _} -> [response(:mem_end, <<0, 0, 0, 0>>), {:error, :invalid_escape}, "OHAI"]
+        req -> stub_handler().(req)
+      end
+
+      device = device(handler, chip: :esp32c3, stub?: false)
+      assert {:ok, %Device{stub?: true}} = Bootloader.load_stub(device)
+    end
   end
 
   describe "change_baud/2" do

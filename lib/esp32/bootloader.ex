@@ -281,12 +281,13 @@ defmodule Esp32.Bootloader do
     end
   end
 
-  defp wait_for_ohai(_device, 0), do: {:error, :stub_start_failed}
+  defp wait_for_ohai(_device, 0), do: {:error, {:stub_start_failed, :no_response}}
 
   defp wait_for_ohai(device, reads_left) do
     case UART.read_frame(device.uart, @default_timeout) do
       {:ok, "OHAI"} -> :ok
       {:ok, <<0x01, _::binary>>} -> wait_for_ohai(device, reads_left - 1)
+      {:ok, {:error, _}} -> wait_for_ohai(device, reads_left - 1)
       {:ok, other} -> {:error, {:stub_start_failed, other}}
       error -> error
     end
