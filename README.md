@@ -48,7 +48,8 @@ On Nerves hardware where EN and IO0 are wired to GPIOs, pass the pin names:
 - `:initial_baud_rate` - speed used to connect and load the flasher stub (default
   115200).
 - `:use_stub` - load the flasher stub. Without it flashing uses the slower ROM
-  loader and `erase/1` is unavailable (default `true`).
+  loader and `erase/1` is unavailable (default `true`). The ESP8266 is only
+  supported with the stub.
 - `:reset` - reset the chip into the bootloader. Set to `false` when it is already
   there (default `true`).
 - `:reset_pin` and `:boot_pin` - `Circuits.GPIO` pin names wired to EN and IO0. When

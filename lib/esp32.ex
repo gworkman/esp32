@@ -121,6 +121,9 @@ defmodule Esp32 do
     end
   end
 
+  defp maybe_load_stub(%{chip: :esp8266, stub?: false}, false),
+    do: {:error, {:stub_required, :esp8266}}
+
   defp maybe_load_stub(%{stub?: true} = device, _use_stub), do: {:ok, device}
   defp maybe_load_stub(device, false), do: {:ok, device}
   defp maybe_load_stub(device, true), do: Bootloader.load_stub(device)
@@ -221,7 +224,6 @@ defmodule Esp32 do
   end
 
   defp maybe_verify(_device, _binary, _offset, false), do: :ok
-  defp maybe_verify(%{stub?: false, chip: :esp8266}, _binary, _offset, true), do: :ok
 
   defp maybe_verify(device, binary, offset, true) do
     with {:ok, digest} <- Bootloader.flash_md5(device, offset, byte_size(binary)) do

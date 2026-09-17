@@ -294,8 +294,6 @@ defmodule Esp32.Bootloader do
 
   @doc "Switches the device to `baud`, then the host UART."
   @spec change_baud(Device.t(), pos_integer()) :: {:ok, Device.t()} | {:error, term()}
-  def change_baud(%{stub?: false, chip: :esp8266}, _baud), do: {:error, :stub_required}
-
   def change_baud(device, baud) do
     with {:ok, data} <- change_baud_params(device, baud),
          {:ok, _, _} <- command(device, :change_baudrate, data),

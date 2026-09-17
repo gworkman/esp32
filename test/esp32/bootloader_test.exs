@@ -308,11 +308,6 @@ defmodule Esp32.BootloaderTest do
       assert {:error, {:change_baudrate, 5}} = Bootloader.change_baud(device, 921_600)
       assert FakeUART.calls(device.uart) == []
     end
-
-    test "is unsupported on the ESP8266 ROM" do
-      device = device(fn _ -> [] end, chip: :esp8266, stub?: false)
-      assert {:error, :stub_required} = Bootloader.change_baud(device, 921_600)
-    end
   end
 
   test "flash_block_size/1" do

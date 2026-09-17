@@ -72,6 +72,17 @@ defmodule Esp32Test do
       assert Enum.count(FakeUART.calls(device.uart), &(&1 == {:set_rts, true})) == 2
     end
 
+    test "the ESP8266 needs the stub" do
+      handler = fn
+        {0x08, _} -> @sync_rom
+        {0x14, _} -> List.duplicate(response(:sync, <<1, 5, 0, 0>>), 8)
+        {0x0A, _} -> [response(:read_reg, @ok_rom, 0xFFF0C101)]
+      end
+
+      assert {:error, {:stub_required, :esp8266}} =
+               Esp32.establish(device(handler), use_stub: false)
+    end
+
     test "returns detection errors" do
       handler = fn
         {0x08, _} -> @sync_rom
