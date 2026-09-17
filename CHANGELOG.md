@@ -28,6 +28,11 @@ and this project adheres to
 
 ### Fixed
 
+- Serial ports listed by full path (macOS) are now matched when choosing the reset
+  strategy, so USB-JTAG/Serial boards reset correctly there.
+- `flash_size:` is also sent to the loader (`SPI_SET_PARAMS`), so the ROM loader can
+  write beyond its 2 MB default.
+
 - SLIP frames arriving in the same read as the previous response are no longer lost.
 - Responses are matched to their command; all eight SYNC replies are consumed.
 - Status bytes are located from the response data length rather than a stub flag.

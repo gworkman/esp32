@@ -62,7 +62,9 @@ On Nerves hardware where EN and IO0 are wired to GPIOs, pass the pin names:
 
 `flash/4` and `flash_file/4` accept `:flash_mode` (`:qio`, `:qout`, `:dio`, `:dout`),
 `:flash_freq` (e.g. `"40m"`) and `:flash_size` (e.g. `"4MB"`), which rewrite the
-header of an image written at the chip's bootloader offset; `:verify` (default
+header of an image written at the chip's bootloader offset. `:flash_size` also tells
+the loader how large the chip is; without it the ROM loader (`use_stub: false`)
+assumes 2 MB and refuses writes above that. `:verify` (default
 `true`) compares the flash MD5 afterwards; `:reboot` (default `false`) hard-resets
 the chip into the application when done (see `Esp32.reset/1`); it needs a reset
 strategy, so it fails with `{:error, :no_reset_strategy}` after `connect(port,
