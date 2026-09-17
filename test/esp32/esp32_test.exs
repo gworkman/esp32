@@ -183,6 +183,11 @@ defmodule Esp32Test do
       device = device(flash_handler(written), chip: :esp32c3, stub?: true)
       assert :ok = Esp32.flash(device, <<0xAA, 0x50, 1, 2, 3>>, 0x8000, flash_mode: :dio)
       assert binary_part(Agent.get(written, & &1), 0, 5) == <<0xAA, 0x50, 1, 2, 3>>
+
+      assert {0x02, <<8::little-32, _::binary>>} = hd(FakeUART.writes(device.uart))
+
+      assert binary_part(Agent.get(written, & &1), 0, 8) ==
+               <<0xAA, 0x50, 1, 2, 3, 0xFF, 0xFF, 0xFF>>
     end
 
     test "patches the header only at the bootloader offset", %{written: written} do

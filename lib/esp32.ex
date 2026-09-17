@@ -180,15 +180,18 @@ defmodule Esp32 do
     with {:ok, binary} <- File.read(path), do: flash(device, binary, offset, opts)
   end
 
+  # Patches bootloader headers, refuses images built for another chip, and pads to 4 bytes
   defp prepare_image(device, binary, offset, opts) do
-    with {:ok, binary} <- maybe_patch_header(device, binary, offset, opts) do
-      case Image.parse(binary) do
-        {:ok, %Image{chip: chip}} when chip != device.chip and device.chip != :esp8266 ->
-          {:error, {:wrong_chip, chip}}
+    with {:ok, binary} <- maybe_patch_header(device, binary, offset, opts),
+         :ok <- check_chip(device, binary) do
+      {:ok, pad(binary, 4)}
+    end
+  end
 
-        _ ->
-          {:ok, binary}
-      end
+  defp check_chip(device, binary) do
+    case Image.parse(binary) do
+      {:ok, %Image{chip: chip}} when chip != device.chip -> {:error, {:wrong_chip, chip}}
+      _ -> :ok
     end
   end
 
