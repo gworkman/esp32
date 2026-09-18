@@ -8,40 +8,48 @@ and this project adheres to
 
 ## [Unreleased]
 
+The bootloader protocol was reworked to follow esptool closely and the public
+API was rebuilt around an `%Esp32.Device{}`. Verified on an ESP32-C3 and an
+ESP32-S3 with both the flasher stub and the ROM loader.
+
+### Added
+
+- `Esp32.reset/1` hard-resets the chip into its application. `reboot: true` on
+  `flash/4` does the same.
+- `Esp32.close/1` and `Esp32.write_reg/3`.
+- Flash writes are verified by MD5 and failed blocks are retried.
+- Images built for a different chip are refused. Non-image data such as
+  partition tables can be flashed.
+- Chip table copied from esptool, adding the ESP32-C5, C61, P4, H21, H4, E22 and
+  S31.
+- Unit tests run against a fake UART, so `mix test` needs no hardware.
+
 ### Changed
 
-- `Esp32.connect/2` returns an `%Esp32.Device{}`; every operation takes it instead
-  of a UART pid. `Esp32.close/1` closes it.
-- `Esp32.connect/2` takes `:auto` instead of `"auto"`, and derives the reset
-  strategy from `:reset_pin`/`:boot_pin` and the port's USB ids; `:auto_reset` is gone.
-- `flash/4` and `flash_file/4` drop `:is_stub`, default header options to `:keep`,
-  reject unknown flash parameters, refuse images built for another chip, and verify
-  the written data by MD5.
-- `Esp32.Image.parse/1` returns `{:ok, %Esp32.Image{}}`.
-- `reboot: true` now hard-resets the chip (DTR/RTS or the EN pin) instead of
-  sending `FLASH_END`, which only re-entered the bootloader; `Esp32.reset/1`
-  exposes the same reset.
+- `Esp32.connect/2` returns an `%Esp32.Device{}` and every other function takes
+  it. The port can be `:auto`, and the reset strategy comes from the pins given
+  or the port's USB ids.
+- `flash/4` header options default to `:keep` and reject unknown values.
+  `:flash_size` also tells the loader the chip size.
+- `Esp32.Image.parse/1` returns an `%Esp32.Image{}`.
+- The ESP8266 is supported through the flasher stub only.
 
 ### Removed
 
-- `Esp32.sync/1`, `Esp32.detect_chip/1`, `Esp32.parse_image/1`, `Esp32.GPIO`.
+- `Esp32.sync/1`, `Esp32.detect_chip/1`, `Esp32.parse_image/1`, `Esp32.GPIO` and
+  the `:is_stub` and `:auto_reset` options.
 
 ### Fixed
 
-- Serial ports listed by full path (macOS) are now matched when choosing the reset
-  strategy, so USB-JTAG/Serial boards reset correctly there.
-- Response frames whose size field under-reports the payload (the stub's
-  `GET_SECURITY_INFO` reply) are no longer dropped.
-- `flash_size:` is also sent to the loader (`SPI_SET_PARAMS`), so the ROM loader can
-  write beyond its 2 MB default.
-
-- SLIP frames arriving in the same read as the previous response are no longer lost.
-- Responses are matched to their command; all eight SYNC replies are consumed.
-- Status bytes are located from the response data length rather than a stub flag.
-- ROM loader flashing sends the extended FLASH_BEGIN parameters, waits for the erase,
-  and no longer exits the loader after each write.
-- Chip ids for C5, C61, P4, H21, H4, E22 and S31; bootloader offsets for C5/P4/H4;
-  chip-specific flash frequency encodings; removed fabricated magic values.
+- Responses are matched to their command and SLIP frames are no longer lost
+  between reads, which could break stub start-up and mistake stale replies for
+  answers.
+- ROM errors were reported as success because status bytes were read at the
+  wrong offset.
+- The USB-JTAG/Serial reset is chosen by the opened port, and macOS port names
+  are matched.
+- Flashing through the ROM loader works on chips newer than the ESP32.
+- `"keep"` no longer rewrites bootloader headers to DIO / 40 MHz / 4 MB.
 
 ## [0.1.0] - 2026-04-16
 

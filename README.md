@@ -45,29 +45,31 @@ On Nerves hardware where EN and IO0 are wired to GPIOs, pass the pin names:
 
 ### Connection Options
 
-- `:baud_rate` - speed used after connecting; higher rates such as 921600 speed up
-  flashing (default 115200).
-- `:initial_baud_rate` - speed used to connect and load the flasher stub (default
-  115200).
+- `:baud_rate` - speed used after connecting; higher rates such as 921600 speed
+  up flashing (default 115200).
+- `:initial_baud_rate` - speed used to connect and load the flasher stub
+  (default 115200).
 - `:use_stub` - load the flasher stub. Without it flashing uses the slower ROM
   loader and `erase/1` is unavailable (default `true`). The ESP8266 is only
   supported with the stub.
-- `:reset` - reset the chip into the bootloader. Set to `false` when it is already
-  there (default `true`).
-- `:reset_pin` and `:boot_pin` - `Circuits.GPIO` pin names wired to EN and IO0. When
-  absent, the DTR/RTS lines are used, with the sequence chosen by the port's USB ids.
+- `:reset` - reset the chip into the bootloader. Set to `false` when it is
+  already there (default `true`).
+- `:reset_pin` and `:boot_pin` - `Circuits.GPIO` pin names wired to EN and IO0.
+  When absent, the DTR/RTS lines are used, with the sequence chosen by the
+  port's USB ids.
 - `:connect_attempts` - how many reset/sync rounds to try (default 7).
 
 ### Flash Options
 
-`flash/4` and `flash_file/4` accept `:flash_mode` (`:qio`, `:qout`, `:dio`, `:dout`),
-`:flash_freq` (e.g. `"40m"`) and `:flash_size` (e.g. `"4MB"`), which rewrite the
-header of an image written at the chip's bootloader offset. `:flash_size` also tells
-the loader how large the chip is; without it the ROM loader (`use_stub: false`)
-assumes 2 MB and refuses writes above that. `:verify` (default
-`true`) compares the flash MD5 afterwards; `:reboot` (default `false`) hard-resets
-the chip into the application when done (see `Esp32.reset/1`); it needs a reset
-strategy, so it fails with `{:error, :no_reset_strategy}` after `connect(port,
+`flash/4` and `flash_file/4` accept `:flash_mode` (`:qio`, `:qout`, `:dio`,
+`:dout`), `:flash_freq` (e.g. `"40m"`) and `:flash_size` (e.g. `"4MB"`), which
+rewrite the header of an image written at the chip's bootloader offset.
+`:flash_size` also tells the loader how large the chip is; without it the ROM
+loader (`use_stub: false`) assumes 2 MB and refuses writes above that. `:verify`
+(default `true`) compares the flash MD5 afterwards; `:reboot` (default `false`)
+hard-resets the chip into the application when done (see `Esp32.reset/1`); it
+needs a reset strategy, so it fails with `{:error, :no_reset_strategy}` after
+`connect(port,
 reset: false)`. Images built for a different chip are refused.
 
 ### Common Firmware Offsets
@@ -84,7 +86,9 @@ offsets vary depending on the chip family:
 | **ESP32-C3** | `0x0`      | `0x8000`        | `0x10000`   |
 | **ESP32-C6** | `0x0`      | `0x8000`        | `0x10000`   |
 
-_Note: `flash_file/4` patches the header when the offset matches the chip's bootloader offset (`0x1000` on ESP32/S2, `0x2000` on C5/P4/H4/S31, `0x0` elsewhere)._
+_Note: `flash_file/4` patches the header when the offset matches the chip's
+bootloader offset (`0x1000` on ESP32/S2, `0x2000` on C5/P4/H4/S31, `0x0`
+elsewhere)._
 
 ## Installation
 
