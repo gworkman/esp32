@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-18
+
 The bootloader protocol was reworked to follow esptool closely and the public
 API was rebuilt around an `%Esp32.Device{}`. Verified on an ESP32-C3 and an
 ESP32-S3 with both the flasher stub and the ROM loader.
@@ -62,5 +64,6 @@ Initial release
 - Uploading stub loader and writing firmware .bin files to flash
 - Tested on ESP32C3 and ESP32C6
 
-[unreleased]: https://github.com/gworkman/esp32/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/gworkman/esp32/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/gworkman/esp32/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/gworkman/esp32/releases/tag/v0.1.0

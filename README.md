@@ -97,7 +97,7 @@ Add `esp32` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:esp32, "~> 0.1.0"},
+    {:esp32, "~> 0.2.0"},
   ]
 end
 ```
